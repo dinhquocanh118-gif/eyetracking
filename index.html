@@ -1,0 +1,1098 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EyeLab — Eye Tracking Research Platform</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script>
+window.__webgazerLoadStatus = 'loading';
+(function(){const urls=['https://cdn.jsdelivr.net/npm/webgazer@3.4.0/dist/webgazer.min.js','https://cdn.jsdelivr.net/npm/webgazer/dist/webgazer.min.js','https://unpkg.com/webgazer@3.4.0/dist/webgazer.min.js','https://webgazer.cs.brown.edu/webgazer.js'];let i=0;function n(){if(i>=urls.length){console.error('[EyeLab] All CDNs failed');window.__webgazerLoadStatus='failed';return}const u=urls[i++];console.log('[EyeLab] Loading:',u);const s=document.createElement('script');s.src=u;s.async=false;s.onload=()=>{if(window.webgazer){console.log('[EyeLab] ✓ Loaded');window.__webgazerLoadStatus='ready'}else n()};s.onerror=()=>n();document.head.appendChild(s)}n()})();
+</script>
+<style>
+:root{--bg:#09090B;--bg-2:#0C0C0E;--surface:#131316;--surface-2:#1C1C21;--border:#27272A;--border-2:#323238;--text:#FAFAFA;--text-2:#A1A1AA;--text-3:#52525B;--accent:#F59E0B;--accent-soft:#FCD34D;--accent-dim:rgba(245,158,11,0.15);--success:#10B981;--danger:#EF4444;--info:#06B6D4}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Inter',sans-serif;background-image:radial-gradient(ellipse at 0% 0%,rgba(245,158,11,0.035),transparent 60%),radial-gradient(ellipse at 100% 100%,rgba(6,182,212,0.025),transparent 60%);min-height:100vh;overflow-x:hidden}
+.font-display{font-family:'Instrument Serif',serif;letter-spacing:-0.01em}
+.font-mono{font-family:'JetBrains Mono',monospace}
+.bg-grid{background-image:linear-gradient(rgba(255,255,255,0.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.025) 1px,transparent 1px);background-size:40px 40px}
+.gaze-dot{position:fixed;width:24px;height:24px;border-radius:50%;pointer-events:none;z-index:99999;background:radial-gradient(circle,rgba(245,158,11,0.85) 0%,rgba(245,158,11,0.3) 50%,rgba(245,158,11,0) 70%);mix-blend-mode:screen;will-change:transform;left:0;top:0}
+.corner-tl,.corner-tr,.corner-bl,.corner-br{position:absolute;width:10px;height:10px;border-color:var(--accent);border-style:solid}
+.corner-tl{top:-1px;left:-1px;border-width:1px 0 0 1px}
+.corner-tr{top:-1px;right:-1px;border-width:1px 1px 0 0}
+.corner-bl{bottom:-1px;left:-1px;border-width:0 0 1px 1px}
+.corner-br{bottom:-1px;right:-1px;border-width:0 1px 1px 0}
+.btn-primary{background:var(--accent);color:#111;border:1px solid var(--accent);padding:10px 20px;font-weight:600;letter-spacing:0.02em;transition:all 0.2s;font-size:13px;text-transform:uppercase;cursor:pointer}
+.btn-primary:hover:not(:disabled){background:var(--accent-soft);box-shadow:0 0 24px rgba(245,158,11,0.3)}
+.btn-primary:disabled{opacity:0.4;cursor:not-allowed}
+.btn-ghost{background:transparent;color:var(--text-2);border:1px solid var(--border-2);padding:9px 18px;font-weight:500;font-size:13px;transition:all 0.2s;text-transform:uppercase;letter-spacing:0.02em;cursor:pointer}
+.btn-ghost:hover{color:var(--text);border-color:var(--text-3)}
+.btn-danger{background:transparent;color:var(--danger);border:1px solid rgba(239,68,68,0.3);padding:9px 18px;font-weight:500;font-size:13px;transition:all 0.2s;text-transform:uppercase;letter-spacing:0.02em;cursor:pointer}
+.btn-danger:hover{background:rgba(239,68,68,0.1);border-color:var(--danger)}
+.panel{background:var(--surface);border:1px solid var(--border);position:relative}
+.panel-header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border);font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-2);text-transform:uppercase;letter-spacing:0.08em}
+.input-base{width:100%;background:var(--bg);border:1px solid var(--border-2);padding:10px 14px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text);transition:border-color 0.2s}
+.input-base:focus{outline:none;border-color:var(--accent)}
+.radio-card{border:1px solid var(--border-2);padding:10px 14px;cursor:pointer;transition:all 0.15s;font-size:13px;text-align:center;display:flex;align-items:center;justify-content:center;gap:6px}
+.radio-card:hover{border-color:var(--text-3)}
+.radio-card.selected{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}
+@keyframes pulse-cal{0%,100%{transform:scale(1);box-shadow:0 0 0 0 rgba(245,158,11,0.7)}50%{transform:scale(1.1);box-shadow:0 0 0 14px rgba(245,158,11,0)}}
+.cal-point{animation:pulse-cal 1.8s infinite}
+.cal-point-done{background:var(--success) !important;animation:none}
+@keyframes rec-blink{0%,100%{opacity:1}50%{opacity:0.3}}
+.rec-dot{animation:rec-blink 1.2s infinite}
+@keyframes scan{0%{transform:translateY(-100%)}100%{transform:translateY(100vh)}}
+.scanline{position:fixed;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,rgba(245,158,11,0.5),transparent);pointer-events:none;z-index:50;animation:scan 8s linear infinite}
+input[type=file]{display:none}
+.drop-zone{border:1px dashed var(--border-2);background:var(--bg-2);transition:all 0.2s}
+.drop-zone:hover,.drop-zone.drag-over{border-color:var(--accent);background:rgba(245,158,11,0.03)}
+/* WebGazer container — completely hidden, used internally only */
+#webgazerVideoContainer{display:none !important;position:fixed !important;width:1px !important;height:1px !important;top:-9999px !important;left:-9999px !important;visibility:hidden !important;opacity:0 !important;pointer-events:none !important}
+#webgazerVideoFeed,#webgazerFaceOverlay,#webgazerFaceFeedbackBox,#webgazerGazeDot{display:none !important;visibility:hidden !important}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--border)}
+::-webkit-scrollbar-thumb:hover{background:var(--border-2)}
+.divider-ornate{display:flex;align-items:center;gap:12px;color:var(--text-3);font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:0.2em;text-transform:uppercase}
+.divider-ornate::before,.divider-ornate::after{content:'';flex:1;height:1px;background:var(--border)}
+/* Recording overlay (when fullscreen) */
+.rec-fs{position:fixed;inset:0;background:#000;z-index:9000;display:flex;align-items:center;justify-content:center}
+.rec-fs video{max-width:100%;max-height:100%;width:auto;height:auto;display:block}
+.rec-fs-controls{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:9001;display:flex;gap:12px;align-items:center;background:rgba(0,0,0,0.7);padding:10px 16px;border:1px solid var(--border);backdrop-filter:blur(8px)}
+.rec-fs-status{position:fixed;top:20px;left:20px;z-index:9001;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text);background:rgba(0,0,0,0.5);padding:8px 14px;border:1px solid var(--border);display:flex;gap:10px;align-items:center}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div class="scanline"></div>
+
+<script type="text/babel" data-presets="env,react">
+const {useState,useRef,useEffect,useCallback,useMemo} = React;
+
+// ============================================================
+// UTILITIES
+// ============================================================
+const nowMs=()=>performance.now();
+const fmt=(n,d=2)=>(n==null||isNaN(n))?'—':Number(n).toFixed(d);
+const fmtMs=(ms)=>{if(ms==null||isNaN(ms))return '—';if(ms<1000)return Math.round(ms)+'ms';return (ms/1000).toFixed(2)+'s'};
+const fmtTime=(s)=>{if(s==null||isNaN(s))return '0:00';const m=Math.floor(s/60),r=Math.floor(s%60);return m+':'+String(r).padStart(2,'0')};
+const generateSessionId=()=>{const d=new Date(),pad=n=>String(n).padStart(2,'0');return `S${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`};
+const median=arr=>{if(!arr.length)return 0;const s=[...arr].sort((a,b)=>a-b),m=Math.floor(s.length/2);return s.length%2?s[m]:(s[m-1]+s[m])/2};
+const stddev=arr=>{if(!arr.length)return 0;const m=arr.reduce((s,v)=>s+v,0)/arr.length;return Math.sqrt(arr.reduce((s,v)=>s+(v-m)**2,0)/arr.length)};
+
+function detectFixations(gazePoints,dispersionPx=50,minDurationMs=100){
+  if(!gazePoints.length)return[];
+  const fix=[];let win=[gazePoints[0]];
+  for(let i=1;i<gazePoints.length;i++){
+    const trial=[...win,gazePoints[i]];
+    const xs=trial.map(q=>q.x),ys=trial.map(q=>q.y);
+    const disp=(Math.max(...xs)-Math.min(...xs))+(Math.max(...ys)-Math.min(...ys));
+    if(disp<=dispersionPx)win=trial;
+    else{
+      const dur=win[win.length-1].timestamp-win[0].timestamp;
+      if(dur>=minDurationMs&&win.length>1){
+        const cx=win.reduce((s,q)=>s+q.x,0)/win.length;
+        const cy=win.reduce((s,q)=>s+q.y,0)/win.length;
+        fix.push({id:fix.length+1,x:cx,y:cy,duration:dur,startTime:win[0].timestamp,endTime:win[win.length-1].timestamp,videoTimeStart:win[0].videoTime,videoTimeEnd:win[win.length-1].videoTime,points:win.length});
+      }
+      win=[gazePoints[i]];
+    }
+  }
+  if(win.length>1){
+    const dur=win[win.length-1].timestamp-win[0].timestamp;
+    if(dur>=minDurationMs){
+      const cx=win.reduce((s,q)=>s+q.x,0)/win.length;
+      const cy=win.reduce((s,q)=>s+q.y,0)/win.length;
+      fix.push({id:fix.length+1,x:cx,y:cy,duration:dur,startTime:win[0].timestamp,endTime:win[win.length-1].timestamp,videoTimeStart:win[0].videoTime,videoTimeEnd:win[win.length-1].videoTime,points:win.length});
+    }
+  }
+  return fix;
+}
+
+// AOI hit test with time bounds (videoTimeSec is current video time in seconds)
+function whichAOI(xN,yN,aois,videoTimeSec){
+  for(const a of aois){
+    if(videoTimeSec!=null){
+      if(videoTimeSec<a.startTime||videoTimeSec>a.endTime)continue;
+    }
+    if(xN>=a.x&&xN<=a.x+a.w&&yN>=a.y&&yN<=a.y+a.h)return a;
+  }
+  return null;
+}
+
+// Comprehensive metrics
+function computeMetrics(gazeData,fixations,aois,videoDurationMs){
+  if(!gazeData.length)return{session:{videoDurationMs},aois:[]};
+  const totalSession=gazeData[gazeData.length-1].videoTime-gazeData[0].videoTime;
+  const inVideo=gazeData.filter(p=>p.xNorm>=0&&p.xNorm<=1&&p.yNorm>=0&&p.yNorm<=1);
+  const inAnyAoi=gazeData.filter(p=>p.aoi!=null);
+  const saccades=[];
+  for(let i=1;i<fixations.length;i++){
+    const a=fixations[i-1],b=fixations[i];
+    const amp=Math.hypot(b.x-a.x,b.y-a.y);
+    const dur=Math.max(1,b.startTime-a.endTime);
+    saccades.push({amplitude:amp,duration:dur,velocity:amp/dur});
+  }
+  const scanPath=saccades.reduce((s,sc)=>s+sc.amplitude,0);
+  const fixDurs=fixations.map(f=>f.duration);
+  const ttffOverall=fixations.length?fixations[0].videoTimeStart:null;
+  const firstInVideo=inVideo.length?inVideo[0].videoTime:null;
+  const lastInVideo=inVideo.length?inVideo[inVideo.length-1].videoTime:null;
+  const engagementScore=gazeData.length?(inAnyAoi.length/gazeData.length)*100:0;
+  const videoFocus=gazeData.length?(inVideo.length/gazeData.length)*100:0;
+  const aoiVisited=new Set(gazeData.map(p=>p.aoi).filter(Boolean));
+  const coverage=aois.length?(aoiVisited.size/aois.length)*100:0;
+  const session={
+    totalSamples:gazeData.length,totalFixations:fixations.length,totalSaccades:saccades.length,
+    totalSessionMs:totalSession,videoDurationMs,
+    samplingRateHz:totalSession?(gazeData.length/(totalSession/1000)):0,
+    meanFixationDurMs:fixDurs.length?fixDurs.reduce((s,v)=>s+v,0)/fixDurs.length:0,
+    medianFixationDurMs:median(fixDurs),stdFixationDurMs:stddev(fixDurs),
+    fixationRatePerSec:totalSession?(fixations.length/(totalSession/1000)):0,
+    meanSaccadeAmp:saccades.length?saccades.reduce((s,v)=>s+v.amplitude,0)/saccades.length:0,
+    meanSaccadeVel:saccades.length?saccades.reduce((s,v)=>s+v.velocity,0)/saccades.length:0,
+    scanPathLength:scanPath,engagementScore,videoFocus,aoiCoverage:coverage,
+    timeToFirstFixationMs:ttffOverall,firstGazeInVideoMs:firstInVideo,lastGazeInVideoMs:lastInVideo,
+    dropOffPointMs:lastInVideo,
+  };
+  const aoiMetrics=aois.map(a=>{
+    const ptsIn=gazeData.filter(p=>p.aoi===a.name);
+    const fxIn=fixations.filter(f=>{
+      const vt=f.videoTimeStart/1000;
+      if(vt<a.startTime||vt>a.endTime)return false;
+      return f.x>=a.x&&f.x<=a.x+a.w&&f.y>=a.y&&f.y<=a.y+a.h;
+    });
+    let visits=0;let prev=false;
+    for(const p of gazeData){const cur=p.aoi===a.name;if(cur&&!prev)visits++;prev=cur}
+    const dwell=fxIn.reduce((s,f)=>s+f.duration,0);
+    const fxDurs=fxIn.map(f=>f.duration);
+    const aoiDurMs=Math.max(1,(a.endTime-a.startTime)*1000);
+    return{
+      ...a,hitCount:ptsIn.length,fixationCount:fxIn.length,visitCount:visits,
+      revisitCount:Math.max(0,visits-1),totalDwellMs:dwell,
+      meanFixationDurMs:fxDurs.length?fxDurs.reduce((s,v)=>s+v,0)/fxDurs.length:0,
+      timeToFirstFixationMs:fxIn.length?fxIn[0].videoTimeStart:null,
+      timeToFirstVisitMs:ptsIn.length?ptsIn[0].videoTime:null,
+      lastFixationMs:fxIn.length?fxIn[fxIn.length-1].videoTimeEnd:null,
+      pctTimeOnAoi:totalSession?(dwell/totalSession)*100:0,
+      pctTimeOnAoiActive:(dwell/aoiDurMs)*100,
+      meanDwellPerVisitMs:visits?dwell/visits:0,
+      areaPct:a.w*a.h*100,activeDurationSec:a.endTime-a.startTime,
+      attentionIndex:visits?(dwell/Math.max(0.01,a.w*a.h*100)):0,
+    };
+  });
+  return{session,aois:aoiMetrics};
+}
+
+function drawHeatmap(canvas,points,width,height){
+  const ctx=canvas.getContext('2d');
+  canvas.width=width;canvas.height=height;
+  ctx.clearRect(0,0,width,height);
+  if(!points.length)return;
+  const sc=document.createElement('canvas');
+  sc.width=width;sc.height=height;
+  const sctx=sc.getContext('2d');
+  for(const p of points){
+    const x=p.xNorm*width,y=p.yNorm*height;
+    const r=Math.min(width,height)*0.08;
+    const g=sctx.createRadialGradient(x,y,0,x,y,r);
+    g.addColorStop(0,'rgba(255,255,255,0.22)');g.addColorStop(1,'rgba(255,255,255,0)');
+    sctx.fillStyle=g;sctx.fillRect(x-r,y-r,r*2,r*2);
+  }
+  const img=sctx.getImageData(0,0,width,height),d=img.data;
+  for(let i=0;i<d.length;i+=4){
+    const a=d[i+3];if(a===0)continue;
+    const t=Math.min(1,a/255);
+    if(t<0.3){d[i]=50+t*600;d[i+1]=100*t;d[i+2]=150*(1-t);d[i+3]=t*200}
+    else if(t<0.6){d[i]=245;d[i+1]=158-(t-0.3)*300;d[i+2]=11;d[i+3]=180+t*60}
+    else{d[i]=239;d[i+1]=68;d[i+2]=68;d[i+3]=220}
+  }
+  ctx.putImageData(img,0,0);
+}
+
+// ============================================================
+// EXPORTS
+// ============================================================
+function buildSpssRow({sessionId,demographics,videoName,session,aoiMetrics}){
+  const g={'male':1,'female':2,'other':3}[demographics.gender]??0;
+  const e={'high_school':1,'bachelor':2,'master':3,'phd':4,'other':5}[demographics.education]??0;
+  const gl=demographics.glasses==='yes'?1:0;
+  const row={
+    session_id:sessionId,participant_id:demographics.participantId,name:demographics.name,
+    age:Number(demographics.age)||0,gender_code:g,education_code:e,
+    occupation:demographics.occupation,glasses_code:gl,video_name:videoName,
+    video_duration_ms:Math.round(session.videoDurationMs||0),
+    total_samples:session.totalSamples||0,total_fixations:session.totalFixations||0,
+    total_saccades:session.totalSaccades||0,
+    sampling_rate_hz:Number(fmt(session.samplingRateHz,2)),
+    mean_fix_dur_ms:Number(fmt(session.meanFixationDurMs,1)),
+    median_fix_dur_ms:Number(fmt(session.medianFixationDurMs,1)),
+    std_fix_dur_ms:Number(fmt(session.stdFixationDurMs,1)),
+    fix_rate_per_sec:Number(fmt(session.fixationRatePerSec,2)),
+    mean_saccade_amp:Number(fmt(session.meanSaccadeAmp,4)),
+    scan_path_length:Number(fmt(session.scanPathLength,4)),
+    engagement_pct:Number(fmt(session.engagementScore,2)),
+    video_focus_pct:Number(fmt(session.videoFocus,2)),
+    aoi_coverage_pct:Number(fmt(session.aoiCoverage,2)),
+    ttff_ms:session.timeToFirstFixationMs??'',
+    drop_off_ms:session.dropOffPointMs??'',
+  };
+  aoiMetrics.forEach((a,i)=>{
+    const k=`aoi${i+1}`;
+    row[`${k}_name`]=a.name;
+    row[`${k}_active_start_s`]=a.startTime;
+    row[`${k}_active_end_s`]=a.endTime;
+    row[`${k}_dwell_ms`]=Math.round(a.totalDwellMs);
+    row[`${k}_fix_count`]=a.fixationCount;
+    row[`${k}_visit_count`]=a.visitCount;
+    row[`${k}_revisits`]=a.revisitCount;
+    row[`${k}_ttff_ms`]=a.timeToFirstFixationMs??'';
+    row[`${k}_pct_time`]=Number(fmt(a.pctTimeOnAoi,2));
+    row[`${k}_pct_time_active`]=Number(fmt(a.pctTimeOnAoiActive,2));
+    row[`${k}_mean_fix_dur_ms`]=Number(fmt(a.meanFixationDurMs,1));
+  });
+  return row;
+}
+
+function exportToExcel({sessionId,demographics,videoName,gazeData,fixations,aois,videoDurationMs,metrics}){
+  const wb=XLSX.utils.book_new();
+  const {session,aois:aoiMetrics}=metrics;
+  const summary=[
+    ['─── SESSION ───',''],
+    ['Session ID',sessionId],['Exported At',new Date().toISOString()],
+    ['Video Name',videoName],['Video Duration (ms)',Math.round(videoDurationMs)],
+    ['',''],['─── PARTICIPANT ───',''],
+    ['Participant ID',demographics.participantId],['Full Name',demographics.name],
+    ['Age',demographics.age],['Gender',demographics.gender],
+    ['Education',demographics.education],['Occupation',demographics.occupation],
+    ['Email',demographics.email||'—'],['Wears Glasses',demographics.glasses],
+    ['',''],['─── SESSION METRICS ───',''],
+    ['Total Gaze Samples',session.totalSamples],
+    ['Total Fixations',session.totalFixations],
+    ['Total Saccades',session.totalSaccades],
+    ['Sampling Rate (Hz)',fmt(session.samplingRateHz,1)],
+    ['Mean Fixation Duration (ms)',fmt(session.meanFixationDurMs,1)],
+    ['Median Fixation Duration (ms)',fmt(session.medianFixationDurMs,1)],
+    ['Std Dev Fixation Duration (ms)',fmt(session.stdFixationDurMs,1)],
+    ['Fixation Rate (per sec)',fmt(session.fixationRatePerSec,2)],
+    ['Mean Saccade Amplitude (norm)',fmt(session.meanSaccadeAmp,4)],
+    ['Mean Saccade Velocity (norm/ms)',fmt(session.meanSaccadeVel,4)],
+    ['Total Scan Path Length (norm)',fmt(session.scanPathLength,4)],
+    ['Engagement Score (% on AOIs)',fmt(session.engagementScore,2)],
+    ['Video Focus (% in bounds)',fmt(session.videoFocus,2)],
+    ['AOI Coverage (% visited)',fmt(session.aoiCoverage,2)],
+    ['Time To First Fixation (ms)',session.timeToFirstFixationMs??'—'],
+    ['Drop-off Point (ms)',session.dropOffPointMs??'—'],
+  ];
+  const ws1=XLSX.utils.aoa_to_sheet(summary);
+  ws1['!cols']=[{wch:36},{wch:32}];
+  XLSX.utils.book_append_sheet(wb,ws1,'Session Summary');
+
+  const rh=['sample_idx','timestamp_ms','video_time_ms','screen_x_px','screen_y_px','video_x_norm','video_y_norm','inside_video','aoi_hit'];
+  const rr=gazeData.map((p,i)=>[i+1,Math.round(p.timestamp),Math.round(p.videoTime),Math.round(p.screenX),Math.round(p.screenY),fmt(p.xNorm,4),fmt(p.yNorm,4),(p.xNorm>=0&&p.xNorm<=1&&p.yNorm>=0&&p.yNorm<=1)?1:0,p.aoi||'']);
+  const ws2=XLSX.utils.aoa_to_sheet([rh,...rr]);
+  ws2['!cols']=rh.map(()=>({wch:14}));
+  XLSX.utils.book_append_sheet(wb,ws2,'Raw Gaze Data');
+
+  const fh=['fixation_id','center_x_norm','center_y_norm','duration_ms','video_time_start_ms','video_time_end_ms','sample_count','aoi_hit'];
+  const fr=fixations.map(f=>{const a=whichAOI(f.x,f.y,aois,f.videoTimeStart/1000);return[f.id,fmt(f.x,4),fmt(f.y,4),Math.round(f.duration),Math.round(f.videoTimeStart),Math.round(f.videoTimeEnd),f.points,a?a.name:'']});
+  const ws3=XLSX.utils.aoa_to_sheet([fh,...fr]);
+  ws3['!cols']=fh.map(()=>({wch:14}));
+  XLSX.utils.book_append_sheet(wb,ws3,'Fixations');
+
+  const ah=['aoi_id','aoi_name','x_norm','y_norm','width_norm','height_norm','area_pct','active_start_s','active_end_s','active_duration_s','hit_count','fixation_count','visit_count','revisit_count','total_dwell_ms','mean_fixation_dur_ms','time_to_first_fixation_ms','time_to_first_visit_ms','last_fixation_ms','pct_time_on_aoi','pct_time_active','mean_dwell_per_visit_ms','attention_index'];
+  const ar=aoiMetrics.map(a=>[a.id,a.name,fmt(a.x,4),fmt(a.y,4),fmt(a.w,4),fmt(a.h,4),fmt(a.areaPct,2),fmt(a.startTime,2),fmt(a.endTime,2),fmt(a.activeDurationSec,2),a.hitCount,a.fixationCount,a.visitCount,a.revisitCount,Math.round(a.totalDwellMs),fmt(a.meanFixationDurMs,1),a.timeToFirstFixationMs??'',a.timeToFirstVisitMs??'',a.lastFixationMs??'',fmt(a.pctTimeOnAoi,2),fmt(a.pctTimeOnAoiActive,2),fmt(a.meanDwellPerVisitMs,1),fmt(a.attentionIndex,2)]);
+  const ws4=XLSX.utils.aoa_to_sheet([ah,...ar]);
+  ws4['!cols']=ah.map(h=>({wch:Math.max(14,h.length+2)}));
+  XLSX.utils.book_append_sheet(wb,ws4,'AOI Analysis');
+
+  const sh=['saccade_idx','from_fixation_id','to_fixation_id','amplitude_norm','duration_ms','velocity','from_video_time_ms','to_video_time_ms'];
+  const sr=[];
+  for(let i=1;i<fixations.length;i++){const a=fixations[i-1],b=fixations[i];const amp=Math.hypot(b.x-a.x,b.y-a.y);const d=b.startTime-a.endTime;sr.push([i,a.id,b.id,fmt(amp,4),Math.round(d),fmt(amp/Math.max(1,d),5),Math.round(a.videoTimeEnd),Math.round(b.videoTimeStart)])}
+  const ws5=XLSX.utils.aoa_to_sheet([sh,...sr]);
+  ws5['!cols']=sh.map(()=>({wch:16}));
+  XLSX.utils.book_append_sheet(wb,ws5,'Saccades');
+
+  const bs=500;const bins=Math.ceil(videoDurationMs/bs);
+  const th=['bin_index','video_time_start_ms','video_time_end_ms','gaze_samples','in_video','in_any_aoi'];
+  const tr=[];
+  for(let b=0;b<bins;b++){const t0=b*bs,t1=(b+1)*bs;const ib=gazeData.filter(p=>p.videoTime>=t0&&p.videoTime<t1);const iv=ib.filter(p=>p.xNorm>=0&&p.xNorm<=1&&p.yNorm>=0&&p.yNorm<=1);const ia=ib.filter(p=>p.aoi!=null);tr.push([b+1,t0,t1,ib.length,iv.length,ia.length])}
+  const ws6=XLSX.utils.aoa_to_sheet([th,...tr]);
+  ws6['!cols']=th.map(()=>({wch:14}));
+  XLSX.utils.book_append_sheet(wb,ws6,'Timeline');
+
+  const sp=buildSpssRow({sessionId,demographics,videoName,session,aoiMetrics});
+  const sph=Object.keys(sp);
+  const ws7=XLSX.utils.aoa_to_sheet([sph,sph.map(k=>sp[k])]);
+  ws7['!cols']=sph.map(h=>({wch:Math.max(14,h.length+2)}));
+  XLSX.utils.book_append_sheet(wb,ws7,'SPSS Ready');
+
+  XLSX.writeFile(wb,`eyelab_${sessionId}.xlsx`);
+}
+
+function exportToCSV({sessionId,demographics,videoName,session,aoiMetrics}){
+  const row=buildSpssRow({sessionId,demographics,videoName,session,aoiMetrics});
+  const headers=Object.keys(row);
+  const values=headers.map(h=>{const v=row[h];if(typeof v==='string'&&(v.includes(',')||v.includes('"')||v.includes('\n')))return`"${v.replace(/"/g,'""')}"`;return v??''});
+  const csv=headers.join(',')+'\n'+values.join(',')+'\n';
+  const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);const a=document.createElement('a');
+  a.href=url;a.download=`eyelab_${sessionId}_spss.csv`;a.click();URL.revokeObjectURL(url);
+}
+
+function exportRawCSV({sessionId,demographics,gazeData}){
+  const cols=['session_id','participant_id','name','age','gender','sample_idx','timestamp_ms','video_time_ms','screen_x_px','screen_y_px','video_x_norm','video_y_norm','inside_video','aoi_hit'];
+  const lines=[cols.join(',')];
+  gazeData.forEach((p,i)=>{const inside=(p.xNorm>=0&&p.xNorm<=1&&p.yNorm>=0&&p.yNorm<=1)?1:0;const sn=(demographics.name||'').replace(/"/g,'""');lines.push([sessionId,demographics.participantId,`"${sn}"`,demographics.age||'',demographics.gender||'',i+1,Math.round(p.timestamp),Math.round(p.videoTime),Math.round(p.screenX),Math.round(p.screenY),fmt(p.xNorm,4),fmt(p.yNorm,4),inside,p.aoi||''].join(','))});
+  const blob=new Blob(['\uFEFF'+lines.join('\n')],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);const a=document.createElement('a');
+  a.href=url;a.download=`eyelab_${sessionId}_raw.csv`;a.click();URL.revokeObjectURL(url);
+}
+
+// ============================================================
+// SHELL
+// ============================================================
+function Shell({phase,children}){
+  const phases=[{id:'welcome',label:'Thông tin'},{id:'upload',label:'Tải video'},{id:'calibration',label:'Hiệu chuẩn'},{id:'aoi',label:'Định nghĩa AOI'},{id:'recording',label:'Ghi dữ liệu'},{id:'results',label:'Kết quả'}];
+  const idx=phases.findIndex(p=>p.id===phase);
+  return(
+    <div className="min-h-screen bg-grid">
+      <header className="border-b border-[var(--border)] bg-[var(--bg-2)]">
+        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="relative w-8 h-8 border border-[var(--accent)] rounded-full flex items-center justify-center">
+              <div className="w-2 h-2 bg-[var(--accent)] rounded-full"></div>
+              <div className="absolute inset-[-4px] border border-[var(--accent)]/30 rounded-full"></div>
+            </div>
+            <div>
+              <div className="font-display text-2xl leading-none">EyeLab<span className="text-[var(--accent)]">.</span></div>
+              <div className="font-mono text-[10px] text-[var(--text-3)] uppercase tracking-widest mt-1">Eye Tracking Research Platform · v0.3</div>
+            </div>
+          </div>
+          <div className="font-mono text-[10px] text-[var(--text-3)] uppercase tracking-widest">UEH · Quality Mgmt Research</div>
+        </div>
+        <div className="max-w-7xl mx-auto px-6 pb-3 flex items-center gap-1">
+          {phases.map((p,i)=>(
+            <React.Fragment key={p.id}>
+              <div className={`flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest ${i===idx?'text-[var(--accent)]':i<idx?'text-[var(--success)]':'text-[var(--text-3)]'}`}>
+                <span>{String(i+1).padStart(2,'0')}</span><span>{p.label}</span>
+              </div>
+              {i<phases.length-1&&<div className="flex-1 h-px bg-[var(--border)] mx-2"></div>}
+            </React.Fragment>
+          ))}
+        </div>
+      </header>
+      <main className="max-w-7xl mx-auto px-6 py-8">{children}</main>
+      <footer className="max-w-7xl mx-auto px-6 py-6 border-t border-[var(--border)] mt-8">
+        <div className="flex items-center justify-between font-mono text-[10px] text-[var(--text-3)] uppercase tracking-widest">
+          <span>Powered by WebGazer.js · 100% client-side · No data leaves your browser</span>
+          <span>© EyeLab Research 2026</span>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+// ============================================================
+// PHASE 01 — DEMOGRAPHICS
+// ============================================================
+function WelcomePhase({onNext,demographics,setDemographics}){
+  const [requesting,setRequesting]=useState(false);
+  const [cameraReady,setCameraReady]=useState(false);
+  const [error,setError]=useState(null);
+  const isFile=typeof window!=='undefined'&&window.location.protocol==='file:';
+  const requestCamera=async()=>{setRequesting(true);setError(null);try{const s=await navigator.mediaDevices.getUserMedia({video:true});s.getTracks().forEach(t=>t.stop());setCameraReady(true)}catch(e){setError('Không truy cập được webcam. Kiểm tra quyền trình duyệt.')}finally{setRequesting(false)}};
+  const update=(k,v)=>setDemographics(d=>({...d,[k]:v}));
+  const isValid=demographics.name.trim().length>0&&Number(demographics.age)>0&&Number(demographics.age)<120&&demographics.gender&&demographics.education&&demographics.consent&&cameraReady;
+  return(
+    <div className="grid grid-cols-12 gap-6">
+      <div className="col-span-12 lg:col-span-7">
+        <div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-[0.3em] mb-4">PHASE 01 / PARTICIPANT INFO</div>
+        <h1 className="font-display text-5xl leading-[1.05] mb-4">Thông tin <span className="italic text-[var(--accent)]">người tham gia</span></h1>
+        <p className="text-[var(--text-2)] leading-relaxed max-w-xl mb-6">Vui lòng điền đầy đủ thông tin. Dữ liệu này được lưu cùng kết quả eye-tracking và xuất ra file CSV/Excel cho SPSS, R, etc.</p>
+        {isFile&&(<div className="panel p-4 mb-6" style={{borderColor:'var(--danger)',background:'rgba(239,68,68,0.05)'}}><div className="text-sm mb-1">⚠ Đang chạy từ file:// — eye-tracking sẽ không hoạt động</div><div className="text-xs text-[var(--text-2)] font-mono">Cần HTTP server: <span className="text-[var(--accent)]">python -m http.server 8000</span></div></div>)}
+        <div className="panel p-6 space-y-5">
+          <div><label className="font-mono text-[10px] text-[var(--text-2)] uppercase tracking-widest block mb-2">Mã người tham gia</label><input className="input-base" value={demographics.participantId} onChange={e=>update('participantId',e.target.value)} /></div>
+          <div className="grid grid-cols-2 gap-4">
+            <div><label className="font-mono text-[10px] text-[var(--text-2)] uppercase tracking-widest block mb-2">Tên đầy đủ <span className="text-[var(--danger)]">*</span></label><input className="input-base" value={demographics.name} onChange={e=>update('name',e.target.value)} placeholder="Nguyễn Văn A" /></div>
+            <div><label className="font-mono text-[10px] text-[var(--text-2)] uppercase tracking-widest block mb-2">Tuổi <span className="text-[var(--danger)]">*</span></label><input type="number" min="1" max="120" className="input-base" value={demographics.age} onChange={e=>update('age',e.target.value)} placeholder="22" /></div>
+          </div>
+          <div><label className="font-mono text-[10px] text-[var(--text-2)] uppercase tracking-widest block mb-2">Giới tính <span className="text-[var(--danger)]">*</span></label>
+            <div className="grid grid-cols-3 gap-2">{[['male','Nam'],['female','Nữ'],['other','Khác']].map(([k,v])=>(<div key={k} className={`radio-card font-mono ${demographics.gender===k?'selected':''}`} onClick={()=>update('gender',k)}>{v}</div>))}</div>
+          </div>
+          <div><label className="font-mono text-[10px] text-[var(--text-2)] uppercase tracking-widest block mb-2">Trình độ học vấn <span className="text-[var(--danger)]">*</span></label>
+            <div className="grid grid-cols-5 gap-2">{[['high_school','THPT'],['bachelor','Đại học'],['master','Thạc sĩ'],['phd','Tiến sĩ'],['other','Khác']].map(([k,v])=>(<div key={k} className={`radio-card font-mono text-xs ${demographics.education===k?'selected':''}`} onClick={()=>update('education',k)}>{v}</div>))}</div>
+          </div>
+          <div><label className="font-mono text-[10px] text-[var(--text-2)] uppercase tracking-widest block mb-2">Nghề nghiệp / Ngành học</label><input className="input-base" value={demographics.occupation} onChange={e=>update('occupation',e.target.value)} placeholder="Sinh viên QTKD — UEH" /></div>
+          <div className="grid grid-cols-2 gap-4">
+            <div><label className="font-mono text-[10px] text-[var(--text-2)] uppercase tracking-widest block mb-2">Email (tuỳ chọn)</label><input className="input-base" value={demographics.email} onChange={e=>update('email',e.target.value)} placeholder="email@example.com" /></div>
+            <div><label className="font-mono text-[10px] text-[var(--text-2)] uppercase tracking-widest block mb-2">Đeo kính cận / loạn?</label>
+              <div className="grid grid-cols-2 gap-2">{[['no','Không'],['yes','Có']].map(([k,v])=>(<div key={k} className={`radio-card font-mono ${demographics.glasses===k?'selected':''}`} onClick={()=>update('glasses',k)}>{v}</div>))}</div>
+            </div>
+          </div>
+          <div className="border-t border-[var(--border)] pt-4">
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input type="checkbox" checked={demographics.consent} onChange={e=>update('consent',e.target.checked)} className="mt-1 accent-[var(--accent)]" />
+              <span className="text-xs text-[var(--text-2)] leading-relaxed">Tôi đồng ý tham gia nghiên cứu eye-tracking này. Tôi hiểu rằng webcam được dùng để ước tính điểm nhìn, dữ liệu xử lý cục bộ trên trình duyệt và xuất ra file cho mục đích nghiên cứu.</span>
+            </label>
+          </div>
+        </div>
+        <div className="mt-6 flex items-center gap-3 flex-wrap">
+          {!cameraReady?(<button onClick={requestCamera} disabled={requesting} className="btn-primary">{requesting?'Đang yêu cầu…':'→ Cấp quyền Webcam'}</button>):(<button onClick={onNext} disabled={!isValid} className="btn-primary">→ Tiếp tục đến Upload</button>)}
+          {cameraReady&&<span className="font-mono text-xs text-[var(--success)]">✓ Webcam sẵn sàng</span>}
+          {!isValid&&cameraReady&&<span className="font-mono text-xs text-[var(--text-3)]">Điền đầy đủ các trường có dấu *</span>}
+        </div>
+        {error&&<div className="mt-4 text-[var(--danger)] text-sm font-mono">{error}</div>}
+      </div>
+      <div className="col-span-12 lg:col-span-5 space-y-4">
+        <div className="panel">
+          <div className="panel-header"><span>System Requirements</span><span>/ CHECKLIST</span></div>
+          <div className="p-6 space-y-4">{[['Thời lượng','Toàn bộ phiên 5–10 phút'],['Webcam','Tích hợp hoặc USB ≥ 480p'],['Ánh sáng','Đồng đều, tránh ngược sáng'],['Khoảng cách','Cách màn hình 50–70 cm'],['Trình duyệt','Chrome / Edge cập nhật']].map(([k,v],i)=>(<div key={i} className="flex gap-4 items-start"><div className="font-mono text-[10px] text-[var(--accent)] pt-1">{String(i+1).padStart(2,'0')}</div><div className="flex-1"><div className="text-sm font-medium">{k}</div><div className="text-xs text-[var(--text-2)] mt-0.5">{v}</div></div></div>))}</div>
+        </div>
+        <div className="panel">
+          <div className="panel-header"><span>Output Formats</span><span>/ EXPORT</span></div>
+          <div className="p-5 text-xs text-[var(--text-2)] leading-relaxed space-y-2">
+            <p><span className="font-mono text-[var(--accent)]">→ XLSX</span> · 7 sheet: Summary, Raw Gaze, Fixations, AOI, Saccades, Timeline, SPSS-Ready</p>
+            <p><span className="font-mono text-[var(--accent)]">→ CSV (SPSS)</span> · Wide format, 1 row/participant với mã hoá categorical</p>
+            <p><span className="font-mono text-[var(--accent)]">→ CSV (Raw)</span> · Long format, 1 row/sample, kèm demographics</p>
+          </div>
+        </div>
+        <div className="panel">
+          <div className="panel-header"><span>Metrics Provided</span><span>/ 30+ FIELDS</span></div>
+          <div className="p-5 text-xs text-[var(--text-2)] leading-relaxed">
+            <p className="mb-2">Tương đương RealEye / Tobii / iMotions:</p>
+            <p><span className="text-[var(--accent)] font-mono">Session:</span> Total Fixations · Saccades · Mean/Median/Std Fix Duration · Fixation Rate · Saccade Amp/Velocity · Scan Path · Engagement · Video Focus · AOI Coverage · TTFF · Drop-off</p>
+            <p className="mt-2"><span className="text-[var(--accent)] font-mono">Per-AOI:</span> Hit Count · Fixations · Visits · Revisits · Dwell Time · Mean Fix Dur · TTFF · TTFV · Last Fix · % Time · Per-Visit Dwell · Attention Index</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// PHASE 02 — UPLOAD
+// ============================================================
+function UploadPhase({onNext,setVideoFile,setVideoUrl,videoFile}){
+  const [dragOver,setDragOver]=useState(false);
+  const inputRef=useRef(null);
+  const handle=f=>{if(!f||!f.type.startsWith('video/'))return;setVideoFile(f);setVideoUrl(URL.createObjectURL(f))};
+  return(
+    <div>
+      <div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-[0.3em] mb-4">PHASE 02 / STIMULUS UPLOAD</div>
+      <h2 className="font-display text-4xl mb-2">Tải lên video quảng cáo</h2>
+      <p className="text-[var(--text-2)] mb-8">Hỗ trợ MP4, WebM, MOV. File chỉ xử lý cục bộ.</p>
+      <div className={`drop-zone p-20 text-center cursor-pointer relative ${dragOver?'drag-over':''}`} onClick={()=>inputRef.current?.click()} onDragOver={e=>{e.preventDefault();setDragOver(true)}} onDragLeave={()=>setDragOver(false)} onDrop={e=>{e.preventDefault();setDragOver(false);handle(e.dataTransfer.files?.[0])}}>
+        <div className="corner-tl"></div><div className="corner-tr"></div><div className="corner-bl"></div><div className="corner-br"></div>
+        <input ref={inputRef} type="file" accept="video/*" onChange={e=>handle(e.target.files?.[0])} />
+        <div className="font-mono text-[10px] text-[var(--text-3)] uppercase tracking-widest mb-4">INPUT / VIDEO_FILE</div>
+        <div className="font-display text-3xl mb-2">{videoFile?<>✓ <span className="italic text-[var(--accent)]">{videoFile.name}</span></>:<>Kéo thả file vào đây</>}</div>
+        <div className="text-[var(--text-2)] text-sm">{videoFile?`${(videoFile.size/1024/1024).toFixed(1)} MB · ${videoFile.type} · Click để thay đổi`:'hoặc click để chọn'}</div>
+      </div>
+      {videoFile&&(<div className="mt-8 flex justify-end gap-3"><button onClick={()=>{setVideoFile(null);setVideoUrl(null)}} className="btn-ghost">← Đổi file</button><button onClick={onNext} className="btn-primary">→ Tiếp tục đến Hiệu chuẩn</button></div>)}
+    </div>
+  );
+}
+
+// ============================================================
+// PHASE 03 — CALIBRATION (camera HIDDEN like gazerecorder.com)
+// ============================================================
+function CalibrationPhase({onNext,webgazerReady}){
+  const POINTS=[{x:10,y:10},{x:50,y:10},{x:90,y:10},{x:10,y:50},{x:50,y:50},{x:90,y:50},{x:10,y:90},{x:50,y:90},{x:90,y:90}];
+  const REQUIRED=5;
+  const [clicks,setClicks]=useState(Array(9).fill(0));
+  const [initTimeout,setInitTimeout]=useState(false);
+  const dotRef=useRef(null);
+  const isFile=typeof window!=='undefined'&&window.location.protocol==='file:';
+
+  useEffect(()=>{if(webgazerReady)return;const t=setTimeout(()=>setInitTimeout(true),20000);return()=>clearTimeout(t)},[webgazerReady]);
+
+  // RAF-based gaze dot — no React re-renders
+  useEffect(()=>{
+    if(!webgazerReady||!window.webgazer)return;
+    let raf=null,lx=0,ly=0;
+    window.webgazer.setGazeListener(data=>{
+      if(data&&dotRef.current){
+        lx=data.x;ly=data.y;
+        if(!raf){raf=requestAnimationFrame(()=>{if(dotRef.current)dotRef.current.style.transform=`translate(${lx}px,${ly}px) translate(-50%,-50%)`;raf=null})}
+      }
+    });
+    return()=>{if(raf)cancelAnimationFrame(raf);try{window.webgazer?.clearGazeListener?.()}catch(e){}};
+  },[webgazerReady]);
+
+  const handleClick=i=>setClicks(p=>{const n=[...p];if(n[i]<REQUIRED)n[i]+=1;return n});
+  const total=clicks.reduce((s,c)=>s+c,0);
+  const progress=(total/(9*REQUIRED))*100;
+  const allDone=clicks.every(c=>c>=REQUIRED);
+
+  if(initTimeout&&!webgazerReady){
+    const has=typeof window!=='undefined'&&!!window.webgazer;
+    return(
+      <div>
+        <div className="font-mono text-[10px] text-[var(--danger)] uppercase tracking-[0.3em] mb-4">ERROR / WEBGAZER INIT FAILED</div>
+        <h2 className="font-display text-4xl mb-4">Không thể khởi động eye-tracking</h2>
+        <div className="panel p-6 mb-6" style={{borderColor:'var(--danger)'}}>
+          <div className="text-sm text-[var(--text-2)] leading-relaxed mb-3">{isFile?'Đang chạy từ file:// — Chrome chặn tải model AI. Cần chạy qua HTTP server.':!has?'Không tải được WebGazer từ CDN. Kiểm tra kết nối internet.':'Webcam có thể bị từ chối hoặc model TFFacemesh tải không xong.'}</div>
+          <div className="font-mono text-[10px] text-[var(--text-3)] bg-[var(--bg)] p-2 border border-[var(--border)]">protocol: {window.location.protocol} · script: {window.__webgazerLoadStatus} · webgazer: {has?'available':'undefined'}</div>
+        </div>
+        <button onClick={()=>window.location.reload()} className="btn-primary">↻ Thử lại</button>
+      </div>
+    );
+  }
+
+  return(
+    <div>
+      <div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-[0.3em] mb-4">PHASE 03 / GAZE MODEL CALIBRATION</div>
+      <h2 className="font-display text-4xl mb-2">Hiệu chuẩn mô hình</h2>
+      <p className="text-[var(--text-2)] mb-6">Nhìn thẳng vào mỗi chấm tròn, sau đó click vào nó <span className="text-[var(--accent)] font-mono">{REQUIRED} lần</span>. Lặp lại cho cả 9 điểm. Giữ đầu ổn định.</p>
+      <div className="panel mb-4 p-4 flex items-center gap-3">
+        <div className={`w-2 h-2 rounded-full ${webgazerReady?'bg-[var(--success)]':'bg-[var(--accent)] cal-point'}`}></div>
+        <div className="font-mono text-xs">{webgazerReady?<span className="text-[var(--success)]">✓ WebGazer sẵn sàng — chấm cam = điểm nhìn dự đoán</span>:<span className="text-[var(--accent)]">⟳ Đang khởi động webcam và mô hình AI…</span>}</div>
+      </div>
+      <div className="panel mb-4">
+        <div className="panel-header"><span>Calibration Progress</span><span className="font-mono">{total} / {9*REQUIRED} · {fmt(progress,0)}%</span></div>
+        <div className="h-1 bg-[var(--bg)]"><div className="h-full bg-[var(--accent)] transition-all" style={{width:`${progress}%`}}></div></div>
+      </div>
+      <div className="relative panel" style={{height:'70vh',minHeight:500}}>
+        <div className="corner-tl"></div><div className="corner-tr"></div><div className="corner-bl"></div><div className="corner-br"></div>
+        {POINTS.map((p,i)=>{const done=clicks[i]>=REQUIRED;return(<button key={i} onClick={()=>handleClick(i)} className={`absolute rounded-full ${done?'cal-point-done':'cal-point'}`} style={{left:`${p.x}%`,top:`${p.y}%`,transform:'translate(-50%,-50%)',width:22,height:22,background:'var(--accent)',border:'2px solid #111',cursor:done?'default':'pointer'}}><span className="absolute top-full left-1/2 -translate-x-1/2 mt-2 font-mono text-[10px] text-[var(--text-2)] whitespace-nowrap">{clicks[i]}/{REQUIRED}</span></button>)})}
+        <div ref={dotRef} className="gaze-dot" style={{display:webgazerReady?'block':'none'}}></div>
+        <div className="absolute bottom-4 left-4 font-mono text-[10px] text-[var(--text-3)] uppercase tracking-widest">[live gaze preview]</div>
+      </div>
+      <div className="mt-6 flex justify-between items-center">
+        <div className="font-mono text-xs text-[var(--text-2)]">{allDone?<span className="text-[var(--success)]">✓ Hiệu chuẩn hoàn tất</span>:'Hoàn thành tất cả 9 điểm để tiếp tục'}</div>
+        <div className="flex gap-3"><button onClick={()=>setClicks(Array(9).fill(0))} className="btn-ghost">↻ Reset</button><button onClick={onNext} disabled={!allDone} className="btn-primary">→ Tiếp tục đến AOI</button></div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// PHASE 04 — AOI WITH TIME BOUNDS
+// ============================================================
+function AoiPhase({onNext,videoUrl,aois,setAois}){
+  const videoRef=useRef(null);
+  const canvasRef=useRef(null);
+  const [draft,setDraft]=useState(null);
+  const [dragging,setDragging]=useState(false);
+  const [aoiName,setAoiName]=useState('');
+  const [currentTime,setCurrentTime]=useState(0);
+  const [videoDur,setVideoDur]=useState(0);
+  const [editingAoi,setEditingAoi]=useState(null); // {id, field: 'start'|'end'}
+  const colors=['#F59E0B','#06B6D4','#10B981','#EC4899','#8B5CF6','#EF4444'];
+
+  // Pause WebGazer to save CPU
+  useEffect(()=>{if(window.webgazer){try{window.webgazer.pause()}catch(e){}}return()=>{if(window.webgazer){try{window.webgazer.resume()}catch(e){}}}},[]);
+
+  useEffect(()=>{const v=videoRef.current;if(!v)return;
+    const onTime=()=>setCurrentTime(v.currentTime);
+    const onLoad=()=>setVideoDur(v.duration);
+    v.addEventListener('timeupdate',onTime);v.addEventListener('loadedmetadata',onLoad);
+    return()=>{v.removeEventListener('timeupdate',onTime);v.removeEventListener('loadedmetadata',onLoad)};
+  },[]);
+
+  const getPos=e=>{const r=canvasRef.current.getBoundingClientRect();return{x:(e.clientX-r.left)/r.width,y:(e.clientY-r.top)/r.height}};
+  const onMD=e=>{const p=getPos(e);setDragging(true);setDraft({x0:p.x,y0:p.y,x1:p.x,y1:p.y})};
+  const onMM=e=>{if(!dragging)return;const p=getPos(e);setDraft(d=>({...d,x1:p.x,y1:p.y}))};
+  const onMU=()=>{setDragging(false);if(draft){const x=Math.min(draft.x0,draft.x1),y=Math.min(draft.y0,draft.y1),w=Math.abs(draft.x1-draft.x0),h=Math.abs(draft.y1-draft.y0);if(w>0.01&&h>0.01)setDraft({x,y,w,h,pending:true});else setDraft(null)}};
+
+  const saveDraft=()=>{
+    if(!draft||!aoiName.trim())return;
+    const newA={id:aois.length+1,name:aoiName.trim(),x:draft.x,y:draft.y,w:draft.w,h:draft.h,startTime:0,endTime:videoDur||999};
+    setAois([...aois,newA]);setDraft(null);setAoiName('');
+  };
+  const removeAoi=id=>setAois(aois.filter(a=>a.id!==id));
+  const updateAoiTime=(id,field,value)=>setAois(aois.map(a=>{if(a.id!==id)return a;const nv=Math.max(0,Math.min(videoDur,Number(value)||0));if(field==='startTime'&&nv>=a.endTime)return a;if(field==='endTime'&&nv<=a.startTime)return a;return{...a,[field]:nv}}));
+  const setAoiTimeFromVideo=(id,field)=>updateAoiTime(id,field,currentTime);
+
+  // Determine which AOIs are active at current time (for visualization)
+  const activeNow=aois.filter(a=>currentTime>=a.startTime&&currentTime<=a.endTime);
+
+  return(
+    <div>
+      <div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-[0.3em] mb-4">PHASE 04 / AREAS OF INTEREST</div>
+      <h2 className="font-display text-4xl mb-2">Định nghĩa vùng quan tâm</h2>
+      <p className="text-[var(--text-2)] mb-6">Tua video, kéo chuột để vẽ AOI. Mỗi AOI có thể được giới hạn <span className="text-[var(--accent)]">thời gian xuất hiện</span> riêng (start time → end time).</p>
+
+      <div className="grid grid-cols-12 gap-6">
+        <div className="col-span-12 lg:col-span-8">
+          <div className="panel">
+            <div className="panel-header"><span>Stimulus Canvas</span><span className="font-mono">t = {fmt(currentTime,2)}s / {fmt(videoDur,2)}s · Active AOIs: {activeNow.length}</span></div>
+            <div ref={canvasRef} className="relative bg-black select-none" style={{cursor:'crosshair'}} onMouseDown={onMD} onMouseMove={onMM} onMouseUp={onMU} onMouseLeave={()=>dragging&&onMU()}>
+              <video ref={videoRef} src={videoUrl} controls className="block w-full pointer-events-auto" style={{maxHeight:'60vh'}} onPlay={e=>e.target.pause()} />
+              <div className="absolute inset-0 pointer-events-none">
+                {aois.map((a,i)=>{const active=currentTime>=a.startTime&&currentTime<=a.endTime;return(<div key={a.id} className="absolute" style={{left:`${a.x*100}%`,top:`${a.y*100}%`,width:`${a.w*100}%`,height:`${a.h*100}%`,border:`2px ${active?'solid':'dashed'} ${colors[i%colors.length]}`,backgroundColor:active?colors[i%colors.length]+'15':'transparent',opacity:active?1:0.4}}><div className="absolute -top-6 left-0 font-mono text-[10px] px-2 py-0.5 text-black font-bold" style={{background:colors[i%colors.length]}}>{a.name} {!active&&'(inactive)'}</div></div>)})}
+                {draft&&(<div className="absolute border-2 border-dashed" style={{left:`${(draft.x??Math.min(draft.x0,draft.x1))*100}%`,top:`${(draft.y??Math.min(draft.y0,draft.y1))*100}%`,width:`${(draft.w??Math.abs(draft.x1-draft.x0))*100}%`,height:`${(draft.h??Math.abs(draft.y1-draft.y0))*100}%`,borderColor:'var(--accent)',backgroundColor:'rgba(245,158,11,0.1)'}} />)}
+              </div>
+            </div>
+          </div>
+          <div className="font-mono text-[10px] text-[var(--text-3)] mt-2 uppercase tracking-widest">ℹ AOI nét đứt = không active tại thời điểm hiện tại</div>
+
+          {/* Timeline visualization showing AOI active ranges */}
+          {aois.length>0&&videoDur>0&&(
+            <div className="panel mt-4">
+              <div className="panel-header"><span>AOI Activity Timeline</span><span className="font-mono">0s — {fmt(videoDur,1)}s</span></div>
+              <div className="p-4 space-y-2">
+                {aois.map((a,i)=>(
+                  <div key={a.id} className="flex items-center gap-2">
+                    <div className="w-20 font-mono text-[10px] truncate text-right">{a.name}</div>
+                    <div className="flex-1 relative h-5 bg-[var(--bg)] border border-[var(--border)]">
+                      <div className="absolute h-full" style={{left:`${(a.startTime/videoDur)*100}%`,width:`${((a.endTime-a.startTime)/videoDur)*100}%`,background:colors[i%colors.length]+'80'}}></div>
+                      <div className="absolute h-full w-px bg-[var(--accent)]" style={{left:`${(currentTime/videoDur)*100}%`}}></div>
+                    </div>
+                    <div className="w-32 font-mono text-[10px] text-[var(--text-2)]">{fmtTime(a.startTime)} → {fmtTime(a.endTime)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="col-span-12 lg:col-span-4">
+          <div className="panel">
+            <div className="panel-header"><span>New AOI</span><span>/ DRAFT</span></div>
+            <div className="p-5">
+              {draft&&draft.pending?(
+                <div className="space-y-3">
+                  <div className="font-mono text-[10px] text-[var(--text-2)] uppercase tracking-widest">Đã vẽ — {fmt(draft.w*100,1)}% × {fmt(draft.h*100,1)}%</div>
+                  <input type="text" value={aoiName} onChange={e=>setAoiName(e.target.value)} placeholder="Logo, Headline, CTA..." className="input-base" autoFocus onKeyDown={e=>e.key==='Enter'&&saveDraft()} />
+                  <div className="flex gap-2">
+                    <button onClick={saveDraft} disabled={!aoiName.trim()} className="btn-primary flex-1">+ Lưu AOI</button>
+                    <button onClick={()=>{setDraft(null);setAoiName('')}} className="btn-ghost">✕</button>
+                  </div>
+                  <div className="font-mono text-[10px] text-[var(--text-3)]">Mặc định active toàn bộ video. Có thể chỉnh time bounds sau khi lưu.</div>
+                </div>
+              ):(<div className="text-[var(--text-3)] text-sm font-mono text-center py-4">[kéo chuột trên video để vẽ]</div>)}
+            </div>
+          </div>
+
+          <div className="panel mt-4">
+            <div className="panel-header"><span>Defined AOIs</span><span className="font-mono">N = {aois.length}</span></div>
+            <div className="max-h-[500px] overflow-y-auto">
+              {aois.length===0?(<div className="p-6 text-center text-[var(--text-3)] text-sm font-mono">Chưa có AOI nào</div>):aois.map((a,i)=>(
+                <div key={a.id} className="px-4 py-3 border-b border-[var(--border)] last:border-b-0">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-3 h-3" style={{background:colors[i%colors.length]}}></div>
+                    <div className="text-sm font-medium flex-1">{a.name}</div>
+                    <button onClick={()=>removeAoi(a.id)} className="text-[var(--text-3)] hover:text-[var(--danger)] text-lg">×</button>
+                  </div>
+                  <div className="font-mono text-[10px] text-[var(--text-3)] mb-2">x={fmt(a.x,2)} y={fmt(a.y,2)} w={fmt(a.w,2)} h={fmt(a.h,2)}</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="font-mono text-[9px] text-[var(--text-3)] uppercase block mb-1">Start (s)</label>
+                      <div className="flex gap-1">
+                        <input type="number" min="0" max={videoDur} step="0.1" value={fmt(a.startTime,1)} onChange={e=>updateAoiTime(a.id,'startTime',e.target.value)} className="input-base" style={{padding:'4px 6px',fontSize:11}} />
+                        <button onClick={()=>setAoiTimeFromVideo(a.id,'startTime')} className="btn-ghost" style={{padding:'4px 8px',fontSize:9}} title="Set from current video time">⊕</button>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="font-mono text-[9px] text-[var(--text-3)] uppercase block mb-1">End (s)</label>
+                      <div className="flex gap-1">
+                        <input type="number" min="0" max={videoDur} step="0.1" value={fmt(a.endTime,1)} onChange={e=>updateAoiTime(a.id,'endTime',e.target.value)} className="input-base" style={{padding:'4px 6px',fontSize:11}} />
+                        <button onClick={()=>setAoiTimeFromVideo(a.id,'endTime')} className="btn-ghost" style={{padding:'4px 8px',fontSize:9}} title="Set from current video time">⊕</button>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="font-mono text-[9px] text-[var(--text-3)] mt-1">Duration: {fmt(a.endTime-a.startTime,1)}s · ⊕ = lấy từ video time hiện tại</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-6 flex flex-col gap-2">
+            <button onClick={onNext} disabled={aois.length===0} className="btn-primary w-full">→ Bắt đầu ghi dữ liệu</button>
+            <div className="font-mono text-[10px] text-[var(--text-3)] text-center">{aois.length===0?'cần ít nhất 1 AOI':'sẵn sàng ghi'}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// PHASE 05 — RECORDING (FULLSCREEN + EARLY STOP)
+// ============================================================
+function RecordingPhase({onNext,videoUrl,aois,gazeBufferRef,setVideoDuration,setGazeData}){
+  const videoRef=useRef(null);
+  const containerRef=useRef(null);
+  const dotRef=useRef(null);
+  const [isPlaying,setIsPlaying]=useState(false);
+  const [videoTime,setVideoTime]=useState(0);
+  const [duration,setDuration]=useState(0);
+  const [sampleCount,setSampleCount]=useState(0);
+  const [liveAoi,setLiveAoi]=useState(null);
+  const [isFullscreen,setIsFullscreen]=useState(false);
+  const isPlayingRef=useRef(false);
+  const aoisRef=useRef(aois);
+  const finalizedRef=useRef(false);
+  const colors=['#F59E0B','#06B6D4','#10B981','#EC4899','#8B5CF6','#EF4444'];
+
+  useEffect(()=>{aoisRef.current=aois},[aois]);
+  useEffect(()=>{isPlayingRef.current=isPlaying},[isPlaying]);
+
+  // Resume webgazer when entering this phase
+  useEffect(()=>{if(window.webgazer){try{window.webgazer.resume()}catch(e){}}},[]);
+
+  // Fullscreen change detection
+  useEffect(()=>{
+    const onFs=()=>setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange',onFs);
+    return()=>document.removeEventListener('fullscreenchange',onFs);
+  },[]);
+
+  // Single gaze listener — uses refs, doesn't re-attach
+  useEffect(()=>{
+    if(!window.webgazer)return;
+    let raf=null,lx=0,ly=0,throttle=null,pendingAoi=null;
+    const v=videoRef.current;
+    window.webgazer.setGazeListener(data=>{
+      if(!data||!v)return;
+      lx=data.x;ly=data.y;
+      if(!raf){raf=requestAnimationFrame(()=>{if(dotRef.current)dotRef.current.style.transform=`translate(${lx}px,${ly}px) translate(-50%,-50%)`;raf=null})}
+      if(isPlayingRef.current){
+        const r=v.getBoundingClientRect();
+        const xN=(lx-r.left)/r.width;
+        const yN=(ly-r.top)/r.height;
+        const inB=xN>=0&&xN<=1&&yN>=0&&yN<=1;
+        const hit=inB?whichAOI(xN,yN,aoisRef.current,v.currentTime):null;
+        pendingAoi=hit?hit.name:null;
+        gazeBufferRef.current.push({timestamp:nowMs(),videoTime:v.currentTime*1000,screenX:lx,screenY:ly,xNorm:xN,yNorm:yN,aoi:hit?hit.name:null});
+        if(!throttle){throttle=setTimeout(()=>{setSampleCount(gazeBufferRef.current.length);setLiveAoi(pendingAoi);throttle=null},250)}
+      }
+    });
+    return()=>{if(raf)cancelAnimationFrame(raf);if(throttle)clearTimeout(throttle);try{window.webgazer?.clearGazeListener?.()}catch(e){}};
+  },[]);
+
+  useEffect(()=>{const v=videoRef.current;if(!v)return;
+    const onTime=()=>setVideoTime(v.currentTime);
+    const onLoad=()=>setDuration(v.duration);
+    const onEnd=()=>{setIsPlaying(false);finalize()};
+    const onPlay=()=>setIsPlaying(true);
+    const onPause=()=>setIsPlaying(false);
+    v.addEventListener('timeupdate',onTime);v.addEventListener('loadedmetadata',onLoad);v.addEventListener('ended',onEnd);v.addEventListener('play',onPlay);v.addEventListener('pause',onPause);
+    return()=>{v.removeEventListener('timeupdate',onTime);v.removeEventListener('loadedmetadata',onLoad);v.removeEventListener('ended',onEnd);v.removeEventListener('play',onPlay);v.removeEventListener('pause',onPause)};
+  },[]);
+
+  const finalize=useCallback(()=>{
+    if(finalizedRef.current)return;
+    finalizedRef.current=true;
+    const v=videoRef.current;
+    const dur=(duration||v?.duration||0)*1000;
+    // CRITICAL: stop webgazer to free CPU before heavy results computation
+    try{window.webgazer?.pause?.();window.webgazer?.clearGazeListener?.()}catch(e){}
+    // Exit fullscreen
+    if(document.fullscreenElement){try{document.exitFullscreen()}catch(e){}}
+    setVideoDuration(dur);
+    setGazeData([...gazeBufferRef.current]);
+    setTimeout(()=>onNext(),100);
+  },[duration,onNext,setGazeData,setVideoDuration,gazeBufferRef]);
+
+  const startRecording=async()=>{
+    finalizedRef.current=false;
+    gazeBufferRef.current=[];
+    setSampleCount(0);
+    // Enter fullscreen on container
+    try{
+      if(containerRef.current.requestFullscreen)await containerRef.current.requestFullscreen();
+      else if(containerRef.current.webkitRequestFullscreen)containerRef.current.webkitRequestFullscreen();
+    }catch(e){console.warn('Fullscreen failed, continuing in normal mode',e)}
+    const v=videoRef.current;
+    v.currentTime=0;
+    v.play();
+  };
+
+  const stopEarly=()=>{
+    const v=videoRef.current;
+    if(v)v.pause();
+    finalize();
+  };
+
+  const exitFullscreen=()=>{if(document.fullscreenElement){try{document.exitFullscreen()}catch(e){}}};
+  const progress=duration?(videoTime/duration)*100:0;
+
+  return(
+    <div>
+      <div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-[0.3em] mb-4 flex items-center gap-2">
+        {isPlaying&&<span className="w-2 h-2 bg-[var(--danger)] rounded-full rec-dot"></span>}
+        PHASE 05 / GAZE RECORDING {isPlaying&&'· REC'}
+      </div>
+      <h2 className="font-display text-4xl mb-6">{isPlaying?<>Đang <span className="italic text-[var(--accent)]">ghi dữ liệu</span>…</>:'Sẵn sàng ghi dữ liệu'}</h2>
+
+      <div className="grid grid-cols-12 gap-6">
+        <div className="col-span-12 lg:col-span-9">
+          <div ref={containerRef} className={isFullscreen?'rec-fs':'panel relative'}>
+            {!isFullscreen&&<div className="panel-header"><span>Live Stimulus</span><span className="font-mono">{fmt(videoTime,2)}s / {fmt(duration,2)}s</span></div>}
+            <div className="relative bg-black" style={isFullscreen?{width:'100%',height:'100%',display:'flex',alignItems:'center',justifyContent:'center'}:{}}>
+              <video ref={videoRef} src={videoUrl} className="block" style={isFullscreen?{maxWidth:'100%',maxHeight:'100%',width:'auto',height:'auto'}:{width:'100%',maxHeight:'65vh'}} />
+              <div className="absolute inset-0 pointer-events-none">
+                {aois.map((a,i)=>{const active=videoTime>=a.startTime&&videoTime<=a.endTime;if(!active)return null;return(<div key={a.id} className="absolute border" style={{left:`${a.x*100}%`,top:`${a.y*100}%`,width:`${a.w*100}%`,height:`${a.h*100}%`,borderColor:colors[i%colors.length]+'80'}}><div className="absolute -top-5 left-0 font-mono text-[10px] px-1.5 py-0.5 text-black font-bold" style={{background:colors[i%colors.length]}}>{a.name}</div></div>)})}
+              </div>
+            </div>
+            {!isFullscreen&&<div className="h-1 bg-[var(--bg)]"><div className="h-full bg-[var(--accent)] transition-all" style={{width:`${progress}%`}}></div></div>}
+
+            {/* Fullscreen overlay controls */}
+            {isFullscreen&&(
+              <>
+                <div className="rec-fs-status">
+                  <span className="w-2 h-2 bg-[var(--danger)] rounded-full rec-dot"></span>
+                  <span>REC</span>
+                  <span className="text-[var(--text-3)]">·</span>
+                  <span>{fmt(videoTime,1)}s / {fmt(duration,1)}s</span>
+                  <span className="text-[var(--text-3)]">·</span>
+                  <span>Samples: {sampleCount}</span>
+                  <span className="text-[var(--text-3)]">·</span>
+                  <span style={{color:liveAoi?'var(--success)':'var(--text-3)'}}>{liveAoi||'OUTSIDE'}</span>
+                </div>
+                <div className="rec-fs-controls">
+                  <div className="font-mono text-[10px] text-[var(--text-2)]">{fmt(progress,0)}%</div>
+                  <button onClick={stopEarly} className="btn-danger" style={{padding:'8px 16px'}}>⏹ KẾT THÚC SỚM</button>
+                  <button onClick={exitFullscreen} className="btn-ghost" style={{padding:'8px 16px'}}>⤢ Thoát fullscreen</button>
+                </div>
+              </>
+            )}
+          </div>
+          <div ref={dotRef} className="gaze-dot"></div>
+        </div>
+
+        <div className="col-span-12 lg:col-span-3">
+          <div className="panel mb-4">
+            <div className="panel-header"><span>Live Telemetry</span><span>/ RT</span></div>
+            <div className="p-5 space-y-4">
+              <Stat label="Samples" value={sampleCount} mono />
+              <Stat label="Video Time" value={fmt(videoTime,2)+'s'} mono />
+              <Stat label="Current AOI" value={liveAoi||'— OUTSIDE —'} mono color={liveAoi?'var(--success)':'var(--text-3)'} />
+              <Stat label="Sample Rate" value={videoTime?`${fmt(sampleCount/videoTime,0)} Hz`:'—'} mono />
+            </div>
+          </div>
+
+          {!isPlaying&&videoTime===0&&(
+            <div className="space-y-2">
+              <button onClick={startRecording} className="btn-primary w-full" style={{padding:'14px'}}>● Bắt đầu ghi (Fullscreen)</button>
+              <div className="font-mono text-[10px] text-[var(--text-3)] text-center">Video sẽ phát fullscreen. Bấm ESC hoặc nút "Kết thúc sớm" để dừng.</div>
+            </div>
+          )}
+          {!isPlaying&&videoTime>0&&videoTime<duration&&(
+            <div className="space-y-2">
+              <button onClick={()=>videoRef.current?.play()} className="btn-primary w-full">▶ Tiếp tục</button>
+              <button onClick={finalize} className="btn-ghost w-full">⏹ Kết thúc & Xem kết quả</button>
+            </div>
+          )}
+          {!isPlaying&&videoTime>=duration&&duration>0&&<button onClick={finalize} className="btn-primary w-full">→ Xem kết quả</button>}
+          {isPlaying&&!isFullscreen&&(
+            <div className="space-y-2">
+              <button onClick={()=>videoRef.current?.pause()} className="btn-danger w-full">⏸ Tạm dừng</button>
+              <button onClick={stopEarly} className="btn-ghost w-full">⏹ Kết thúc sớm</button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Stat({label,value,mono,color}){return(<div><div className="font-mono text-[10px] text-[var(--text-3)] uppercase tracking-widest mb-1">{label}</div><div className={`text-lg ${mono?'font-mono':''}`} style={{color:color||'var(--text)'}}>{value}</div></div>)}
+
+// ============================================================
+// PHASE 06 — RESULTS
+// ============================================================
+function ResultsPhase({sessionId,demographics,videoUrl,videoName,videoDuration,aois,gazeData,onRestart}){
+  const heatmapRef=useRef(null);
+  const [videoEl,setVideoEl]=useState(null);
+  const colors=['#F59E0B','#06B6D4','#10B981','#EC4899','#8B5CF6','#EF4444'];
+
+  useEffect(()=>{try{window.webgazer?.pause?.()}catch(e){}},[]);
+
+  const fixations=useMemo(()=>detectFixations(gazeData.map(p=>({x:p.xNorm*1000,y:p.yNorm*1000,timestamp:p.timestamp,videoTime:p.videoTime}))).map(f=>({...f,x:f.x/1000,y:f.y/1000})),[gazeData]);
+  const metrics=useMemo(()=>computeMetrics(gazeData,fixations,aois,videoDuration),[gazeData,fixations,aois,videoDuration]);
+
+  useEffect(()=>{if(!videoEl||!heatmapRef.current)return;const render=()=>{const w=videoEl.clientWidth,h=videoEl.clientHeight;if(w&&h){const valid=gazeData.filter(p=>p.xNorm>=0&&p.xNorm<=1&&p.yNorm>=0&&p.yNorm<=1);drawHeatmap(heatmapRef.current,valid,w,h)}};render();window.addEventListener('resize',render);return()=>window.removeEventListener('resize',render)},[videoEl,gazeData]);
+
+  const handleXlsx=()=>exportToExcel({sessionId,demographics,videoName,gazeData,fixations,aois,videoDurationMs:videoDuration,metrics});
+  const handleSpssCsv=()=>exportToCSV({sessionId,demographics,videoName,session:metrics.session,aoiMetrics:metrics.aois});
+  const handleRawCsv=()=>exportRawCSV({sessionId,demographics,gazeData});
+
+  const timelineBins=useMemo(()=>{const bins=60;const bs=videoDuration/bins;return Array.from({length:bins},(_,i)=>{const t0=i*bs,t1=(i+1)*bs;const ib=gazeData.filter(p=>p.videoTime>=t0&&p.videoTime<t1);const ia=ib.filter(p=>p.aoi!=null).length;return{t:(t0+t1)/2,count:ib.length,aoi:ia}})},[gazeData,videoDuration]);
+
+  const aoiMetrics=metrics.aois;
+  const sortedAois=[...aoiMetrics].map((a,i)=>({...a,color:colors[i%colors.length]})).sort((a,b)=>b.totalDwellMs-a.totalDwellMs);
+
+  return(
+    <div>
+      <div className="flex justify-between items-start mb-6 flex-wrap gap-4">
+        <div>
+          <div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-[0.3em] mb-4">PHASE 06 / ANALYSIS</div>
+          <h2 className="font-display text-4xl mb-1">Kết quả phiên ghi</h2>
+          <div className="font-mono text-xs text-[var(--text-2)]">{sessionId} · {demographics.participantId} · {demographics.name} ({demographics.age}, {demographics.gender}) · {videoName}</div>
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={onRestart} className="btn-ghost">↻ Session mới</button>
+          <button onClick={handleRawCsv} className="btn-ghost">↓ Raw CSV</button>
+          <button onClick={handleSpssCsv} className="btn-ghost">↓ SPSS CSV</button>
+          <button onClick={handleXlsx} className="btn-primary">↓ Excel (.xlsx)</button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-4">
+        <Kpi label="Engagement" value={fmt(metrics.session.engagementScore,1)+'%'} sub="time on AOIs" accent />
+        <Kpi label="Video Focus" value={fmt(metrics.session.videoFocus,1)+'%'} sub="inside video" />
+        <Kpi label="AOI Coverage" value={fmt(metrics.session.aoiCoverage,0)+'%'} sub="visited" />
+        <Kpi label="Fixations" value={metrics.session.totalFixations} sub={`${fmt(metrics.session.fixationRatePerSec,1)}/s`} />
+        <Kpi label="Mean Fix Dur" value={fmt(metrics.session.meanFixationDurMs,0)+'ms'} sub="avg" />
+        <Kpi label="Duration" value={fmt(videoDuration/1000,1)+'s'} sub="recorded" />
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        <SmallStat label="Total Samples" value={metrics.session.totalSamples} />
+        <SmallStat label="Total Saccades" value={metrics.session.totalSaccades} />
+        <SmallStat label="Sampling Rate" value={fmt(metrics.session.samplingRateHz,1)+' Hz'} />
+        <SmallStat label="Median Fix Dur" value={fmt(metrics.session.medianFixationDurMs,0)+'ms'} />
+        <SmallStat label="Std Fix Dur" value={fmt(metrics.session.stdFixationDurMs,0)+'ms'} />
+        <SmallStat label="Mean Saccade Amp" value={fmt(metrics.session.meanSaccadeAmp,3)} />
+        <SmallStat label="Scan Path Length" value={fmt(metrics.session.scanPathLength,2)} />
+        <SmallStat label="TTFF" value={metrics.session.timeToFirstFixationMs?fmtMs(metrics.session.timeToFirstFixationMs):'—'} />
+      </div>
+
+      <div className="grid grid-cols-12 gap-6">
+        <div className="col-span-12 lg:col-span-8">
+          <div className="panel">
+            <div className="panel-header"><span>Attention Heatmap</span><span className="font-mono">N = {gazeData.filter(p=>p.xNorm>=0&&p.xNorm<=1).length}</span></div>
+            <div className="relative bg-black">
+              <video ref={setVideoEl} src={videoUrl} muted controls className="block w-full" style={{maxHeight:'60vh'}} />
+              <canvas ref={heatmapRef} className="absolute inset-0 w-full h-full pointer-events-none" style={{mixBlendMode:'screen',opacity:0.75}} />
+              <div className="absolute inset-0 pointer-events-none">{aois.map((a,i)=>(<div key={a.id} className="absolute border" style={{left:`${a.x*100}%`,top:`${a.y*100}%`,width:`${a.w*100}%`,height:`${a.h*100}%`,borderColor:colors[i%colors.length]+'cc'}}><div className="absolute -top-5 left-0 font-mono text-[10px] px-1.5 py-0.5 text-black font-bold" style={{background:colors[i%colors.length]}}>{a.name}</div></div>))}</div>
+            </div>
+            <div className="p-3 font-mono text-[10px] text-[var(--text-3)] flex items-center justify-between"><span>LOW ←</span><div className="flex-1 mx-3 h-1.5" style={{background:'linear-gradient(90deg,rgba(50,0,100,0.5),#F59E0B,#EF4444)'}}></div><span>→ HIGH</span></div>
+          </div>
+        </div>
+
+        <div className="col-span-12 lg:col-span-4">
+          <div className="panel">
+            <div className="panel-header"><span>AOI Ranking</span><span>/ BY DWELL</span></div>
+            <div className="max-h-[600px] overflow-y-auto">
+              {sortedAois.map((a,i)=>(
+                <div key={a.id} className="p-4 border-b border-[var(--border)] last:border-b-0">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-3 h-3" style={{background:a.color}}></div>
+                    <div className="text-sm font-medium flex-1">{a.name}</div>
+                    <div className="font-mono text-[10px] text-[var(--text-3)]">#{i+1}</div>
+                  </div>
+                  <div className="font-mono text-[9px] text-[var(--text-3)] mb-2">Active: {fmtTime(a.startTime)} → {fmtTime(a.endTime)} ({fmt(a.activeDurationSec,1)}s)</div>
+                  <div className="grid grid-cols-2 gap-2 font-mono text-[10px]">
+                    <div><div className="text-[var(--text-3)] uppercase">Dwell</div><div className="text-sm">{fmtMs(a.totalDwellMs)}</div></div>
+                    <div><div className="text-[var(--text-3)] uppercase">Fixations</div><div className="text-sm">{a.fixationCount}</div></div>
+                    <div><div className="text-[var(--text-3)] uppercase">Visits</div><div className="text-sm">{a.visitCount}</div></div>
+                    <div><div className="text-[var(--text-3)] uppercase">Revisits</div><div className="text-sm">{a.revisitCount}</div></div>
+                    <div><div className="text-[var(--text-3)] uppercase">TTFF</div><div className="text-sm">{a.timeToFirstFixationMs!=null?fmtMs(a.timeToFirstFixationMs):'—'}</div></div>
+                    <div><div className="text-[var(--text-3)] uppercase">% Time</div><div className="text-sm">{fmt(a.pctTimeOnAoi,1)}%</div></div>
+                    <div><div className="text-[var(--text-3)] uppercase">% Active</div><div className="text-sm">{fmt(a.pctTimeOnAoiActive,1)}%</div></div>
+                    <div><div className="text-[var(--text-3)] uppercase">Per Visit</div><div className="text-sm">{fmt(a.meanDwellPerVisitMs,0)}ms</div></div>
+                  </div>
+                  <div className="mt-2 h-1 bg-[var(--bg)]"><div className="h-full" style={{width:`${Math.min(100,a.pctTimeOnAoi)}%`,background:a.color}}></div></div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="col-span-12">
+          <div className="panel">
+            <div className="panel-header"><span>Engagement Timeline</span><span className="font-mono">60 bins</span></div>
+            <div className="p-5">
+              <svg viewBox="0 0 600 140" className="w-full" preserveAspectRatio="none">
+                <line x1="0" y1="120" x2="600" y2="120" stroke="var(--border)" strokeWidth="1"/>
+                {timelineBins.map((b,i)=>{const x=(i/timelineBins.length)*600;const tH=Math.min(100,(b.count/10)*100);const aH=b.count?(b.aoi/b.count)*tH:0;return(<g key={i}><rect x={x} y={120-tH} width={600/timelineBins.length-1} height={tH} fill="var(--border-2)" /><rect x={x} y={120-aH} width={600/timelineBins.length-1} height={aH} fill="var(--accent)" /></g>)})}
+                <text x="5" y="15" fill="var(--text-3)" fontSize="9" fontFamily="JetBrains Mono">SAMPLES / BIN</text>
+                <text x="5" y="135" fill="var(--text-3)" fontSize="9" fontFamily="JetBrains Mono">0s</text>
+                <text x="580" y="135" fill="var(--text-3)" fontSize="9" fontFamily="JetBrains Mono" textAnchor="end">{fmt(videoDuration/1000,1)}s</text>
+              </svg>
+              <div className="flex gap-4 mt-3 font-mono text-[10px] text-[var(--text-2)]"><div className="flex items-center gap-2"><div className="w-3 h-3 bg-[var(--accent)]"></div>Inside AOI</div><div className="flex items-center gap-2"><div className="w-3 h-3 bg-[var(--border-2)]"></div>Outside AOI</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-8 panel p-5">
+        <div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-widest mb-3">Hướng dẫn sử dụng dữ liệu cho SPSS</div>
+        <div className="text-xs text-[var(--text-2)] leading-relaxed space-y-2">
+          <p><span className="font-mono text-[var(--accent)]">SPSS CSV</span> là wide format, 1 dòng/người tham gia. Các biến categorical đã mã hoá: gender_code (1=Nam, 2=Nữ, 3=Khác); education_code (1=THPT, 2=Đại học, 3=Thạc sĩ, 4=Tiến sĩ, 5=Khác); glasses_code (0=Không, 1=Có).</p>
+          <p>Khi gộp nhiều người: thu thập file CSV của từng người, mở SPSS → File → Import Data → CSV, rồi dùng Add Files để gộp tất cả thành dataset trước khi chạy thống kê.</p>
+          <p><span className="font-mono text-[var(--accent)]">Raw CSV</span> dùng cho phân tích time-series khi cần dữ liệu thô từng sample.</p>
+        </div>
+      </div>
+
+      <div className="mt-8 divider-ornate"><span>End of Analysis</span></div>
+    </div>
+  );
+}
+
+function Kpi({label,value,sub,accent}){return(<div className="panel p-4 relative">{accent&&(<><div className="corner-tl"></div><div className="corner-tr"></div></>)}<div className="font-mono text-[10px] text-[var(--text-3)] uppercase tracking-widest mb-1">{label}</div><div className={`font-mono text-2xl ${accent?'text-[var(--accent)]':''}`}>{value}</div><div className="font-mono text-[10px] text-[var(--text-3)] mt-1">{sub}</div></div>)}
+function SmallStat({label,value}){return(<div className="panel p-3"><div className="font-mono text-[10px] text-[var(--text-3)] uppercase tracking-widest mb-1">{label}</div><div className="font-mono text-base">{value}</div></div>)}
+
+// ============================================================
+// APP
+// ============================================================
+function App(){
+  const [phase,setPhase]=useState('welcome');
+  const [demographics,setDemographics]=useState({participantId:'P001',name:'',age:'',gender:'',education:'',occupation:'',email:'',glasses:'no',consent:false});
+  const [videoFile,setVideoFile]=useState(null);
+  const [videoUrl,setVideoUrl]=useState(null);
+  const [aois,setAois]=useState([]);
+  const [gazeData,setGazeData]=useState([]);
+  const [videoDuration,setVideoDuration]=useState(0);
+  const [webgazerReady,setWebgazerReady]=useState(false);
+  const [sessionId]=useState(generateSessionId());
+  const gazeBufferRef=useRef([]);
+
+  useEffect(()=>{
+    if(phase!=='calibration'||webgazerReady)return;
+    let cancelled=false,poll;
+    const tryInit=()=>{
+      if(cancelled)return;
+      if(!window.webgazer)return;
+      clearInterval(poll);
+      console.log('[EyeLab] Starting WebGazer...');
+      window.webgazer.setRegression('ridge').setTracker('TFFacemesh').showVideoPreview(true).showPredictionPoints(false).showFaceOverlay(false).showFaceFeedbackBox(false).begin().then(()=>{
+        if(cancelled)return;
+        console.log('[EyeLab] ✓ Started');
+        setWebgazerReady(true);
+      }).catch(err=>console.error('[EyeLab] init failed:',err));
+    };
+    poll=setInterval(tryInit,300);
+    tryInit();
+    return()=>{cancelled=true;clearInterval(poll)};
+  },[phase,webgazerReady]);
+
+  useEffect(()=>{return()=>{try{window.webgazer?.end?.()}catch(e){}}},[]);
+
+  const restart=()=>{
+    try{window.webgazer?.end?.()}catch(e){}
+    setWebgazerReady(false);
+    setPhase('welcome');
+    setVideoFile(null);setVideoUrl(null);
+    setAois([]);setGazeData([]);
+    gazeBufferRef.current=[];
+  };
+
+  return(
+    <Shell phase={phase}>
+      {phase==='welcome'&&<WelcomePhase onNext={()=>setPhase('upload')} demographics={demographics} setDemographics={setDemographics} />}
+      {phase==='upload'&&<UploadPhase onNext={()=>setPhase('calibration')} setVideoFile={setVideoFile} setVideoUrl={setVideoUrl} videoFile={videoFile} />}
+      {phase==='calibration'&&<CalibrationPhase onNext={()=>setPhase('aoi')} webgazerReady={webgazerReady} />}
+      {phase==='aoi'&&<AoiPhase onNext={()=>setPhase('recording')} videoUrl={videoUrl} aois={aois} setAois={setAois} />}
+      {phase==='recording'&&<RecordingPhase onNext={()=>setPhase('results')} videoUrl={videoUrl} aois={aois} gazeBufferRef={gazeBufferRef} setVideoDuration={setVideoDuration} setGazeData={setGazeData} />}
+      {phase==='results'&&<ResultsPhase sessionId={sessionId} demographics={demographics} videoUrl={videoUrl} videoName={videoFile?.name||'unknown.mp4'} videoDuration={videoDuration} aois={aois} gazeData={gazeData} onRestart={restart} />}
+    </Shell>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
