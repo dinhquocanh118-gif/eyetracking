@@ -3464,6 +3464,8 @@ input[type=file]{display:none}
 .rec-fs-controls{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:9001;display:flex;gap:12px;align-items:center;background:rgba(0,0,0,0.7);padding:10px 16px;border:1px solid var(--border);backdrop-filter:blur(8px)}
 .rec-fs-status{position:fixed;top:20px;left:20px;z-index:9001;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text);background:rgba(0,0,0,0.5);padding:8px 14px;border:1px solid var(--border);display:flex;gap:10px;align-items:center}
 .rec-fs-fixation{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);font-family:'Instrument Serif',serif;font-size:80px;color:var(--accent);z-index:9001}
+.home-floating{position:fixed;left:14px;top:14px;z-index:12000;width:42px;height:42px;border-radius:999px;border:1px solid var(--border-2);background:rgba(12,12,14,0.86);color:var(--text-2);font-family:'JetBrains Mono',monospace;font-size:18px;display:flex;align-items:center;justify-content:center;box-shadow:0 8px 28px rgba(0,0,0,0.35);backdrop-filter:blur(10px);cursor:pointer;transition:all .15s}
+.home-floating:hover{color:var(--accent);border-color:var(--accent);background:rgba(245,158,11,0.08)}
 </style>
 </head>
 <body>
@@ -3487,19 +3489,196 @@ const slug=s=>(s||'').replace(/[^a-zA-Z0-9_-]+/g,'_').replace(/^_+|_+$/g,'').sli
 
 const DEFAULT_IMAGE_DURATION_SEC=8;
 
-const PROJECT_STORAGE_KEY='eyelab_project_gazecloud_v1';
+const LEGACY_PROJECT_STORAGE_KEY='eyelab_project_gazecloud_v1';
+const EYELAB_DB_NAME='eyelab_research_indexeddb_v2';
+const EYELAB_DB_VERSION=3;
+const EYELAB_PROJECT_STORE='projects';
+const EYELAB_META_STORE='meta';
+const EYELAB_TEST_STORE='testSessions';
+const DEFAULT_PROJECT_NAME='Default Project';
 const fileToDataURL=(file)=>new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsDataURL(file)});
+const downloadBlob=(blob,filename)=>{const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};
+const sleep=(ms)=>new Promise(res=>setTimeout(res,ms));
+function newProjectId(){return 'PRJ-'+Date.now()+'-'+Math.random().toString(16).slice(2,8)}
 function serializeStimuliForStorage(stimuli){
-  return stimuli.map(({id,type,name,fileName,size,displayDurationSec,order,aois,dataUrl,url})=>({id,type,name,fileName,size,displayDurationSec,order,aois:aois||[],dataUrl:dataUrl||url}));
+  return stimuli.map(({id,type,name,industry,fileName,size,displayDurationSec,order,aois,dataUrl,url})=>({id,type,name,industry:industry||'',fileName,size,displayDurationSec,order,aois:aois||[],dataUrl:dataUrl||url}));
 }
 function hydrateStoredStimuli(items){
-  return (items||[]).map((s,i)=>({...s,id:s.id||Date.now()+i,order:i+1,url:s.dataUrl,aois:s.aois||[],gazeData:[],durationMs:0}));
+  return (items||[]).map((s,i)=>({...s,id:s.id||Date.now()+i,order:i+1,industry:s.industry||'',url:s.dataUrl,aois:s.aois||[],gazeData:[],durationMs:0}));
 }
-function loadStoredProject(){try{return JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY)||'null')}catch(e){return null}}
-function saveStoredProject(stimuli){
-  const payload={version:1,engine:'GazeCloudAPI',updatedAt:new Date().toISOString(),stimuli:serializeStimuliForStorage(stimuli)};
-  localStorage.setItem(PROJECT_STORAGE_KEY,JSON.stringify(payload));
-  return payload;
+function createProjectPayload(stimuli=[],projectInfo={}){
+  const id=projectInfo.id||newProjectId();
+  const name=(projectInfo.name||DEFAULT_PROJECT_NAME).trim()||DEFAULT_PROJECT_NAME;
+  return{version:2,engine:'GazeCloudAPI',storage:'IndexedDB',id,name,createdAt:projectInfo.createdAt||new Date().toISOString(),updatedAt:new Date().toISOString(),stimuli:serializeStimuliForStorage(stimuli)};
+}
+function openEyeLabDB(){
+  return new Promise((resolve,reject)=>{
+    if(!window.indexedDB){reject(new Error('IndexedDB is not supported in this browser.'));return}
+    const req=indexedDB.open(EYELAB_DB_NAME,EYELAB_DB_VERSION);
+    req.onupgradeneeded=()=>{
+      const db=req.result;
+      if(!db.objectStoreNames.contains(EYELAB_PROJECT_STORE))db.createObjectStore(EYELAB_PROJECT_STORE,{keyPath:'id'});
+      if(!db.objectStoreNames.contains(EYELAB_META_STORE))db.createObjectStore(EYELAB_META_STORE,{keyPath:'key'});
+      if(!db.objectStoreNames.contains(EYELAB_TEST_STORE)){
+        const testStore=db.createObjectStore(EYELAB_TEST_STORE,{keyPath:'id'});
+        testStore.createIndex('projectId','projectId',{unique:false});
+        testStore.createIndex('participantId','participantId',{unique:false});
+      }
+    };
+    req.onsuccess=()=>resolve(req.result);
+    req.onerror=()=>reject(req.error);
+  });
+}
+function idbRequest(req){return new Promise((resolve,reject)=>{req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error)})}
+async function idbGet(storeName,key){const db=await openEyeLabDB();return new Promise((resolve,reject)=>{const tx=db.transaction(storeName,'readonly');const store=tx.objectStore(storeName);const req=store.get(key);req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);tx.oncomplete=()=>db.close();tx.onerror=()=>{db.close();reject(tx.error)}})}
+async function idbPut(storeName,value){const db=await openEyeLabDB();return new Promise((resolve,reject)=>{const tx=db.transaction(storeName,'readwrite');tx.objectStore(storeName).put(value);tx.oncomplete=()=>{db.close();resolve(value)};tx.onerror=()=>{db.close();reject(tx.error)}})}
+async function idbDelete(storeName,key){const db=await openEyeLabDB();return new Promise((resolve,reject)=>{const tx=db.transaction(storeName,'readwrite');tx.objectStore(storeName).delete(key);tx.oncomplete=()=>{db.close();resolve(true)};tx.onerror=()=>{db.close();reject(tx.error)}})}
+async function idbGetAll(storeName){const db=await openEyeLabDB();return new Promise((resolve,reject)=>{const tx=db.transaction(storeName,'readonly');const req=tx.objectStore(storeName).getAll();req.onsuccess=()=>resolve(req.result||[]);req.onerror=()=>reject(req.error);tx.oncomplete=()=>db.close();tx.onerror=()=>{db.close();reject(tx.error)}})}
+async function getActiveProjectId(){const row=await idbGet(EYELAB_META_STORE,'activeProjectId').catch(()=>null);return row?.value||null}
+async function setActiveProjectId(id){await idbPut(EYELAB_META_STORE,{key:'activeProjectId',value:id});return id}
+async function loadProjectList(){
+  const rows=await idbGetAll(EYELAB_PROJECT_STORE).catch(()=>[]);
+  return rows.sort((a,b)=>String(b.updatedAt||'').localeCompare(String(a.updatedAt||''))).map(p=>({id:p.id,name:p.name||DEFAULT_PROJECT_NAME,updatedAt:p.updatedAt,createdAt:p.createdAt,stimulusCount:(p.stimuli||[]).length,aoiCount:(p.stimuli||[]).reduce((s,x)=>s+(x.aois?.length||0),0)}));
+}
+async function loadStoredProject(projectId=null){
+  let id=projectId||await getActiveProjectId();
+  if(id){const p=await idbGet(EYELAB_PROJECT_STORE,id).catch(()=>null);if(p){await setActiveProjectId(p.id);return p}}
+  const projects=await idbGetAll(EYELAB_PROJECT_STORE).catch(()=>[]);
+  if(projects.length){const p=projects.sort((a,b)=>String(b.updatedAt||'').localeCompare(String(a.updatedAt||'')))[0];await setActiveProjectId(p.id);return p}
+  // One-time migration from the older localStorage project, then clear it so storage truly moves to IndexedDB.
+  try{
+    const legacy=JSON.parse(localStorage.getItem(LEGACY_PROJECT_STORAGE_KEY)||'null');
+    if(legacy?.stimuli?.length){
+      const migrated=createProjectPayload(hydrateStoredStimuli(legacy.stimuli),{name:legacy.name||'Migrated Project',createdAt:legacy.updatedAt});
+      await idbPut(EYELAB_PROJECT_STORE,migrated);await setActiveProjectId(migrated.id);localStorage.removeItem(LEGACY_PROJECT_STORAGE_KEY);return migrated;
+    }
+  }catch(e){}
+  return null;
+}
+async function saveStoredProject(stimuli,projectInfo={}){
+  const current=projectInfo.id?await idbGet(EYELAB_PROJECT_STORE,projectInfo.id).catch(()=>null):null;
+  const payload=createProjectPayload(stimuli,{...current,...projectInfo});
+  await idbPut(EYELAB_PROJECT_STORE,payload);await setActiveProjectId(payload.id);return payload;
+}
+async function createStoredProject(name='New Project'){
+  const payload=createProjectPayload([],{name});
+  await idbPut(EYELAB_PROJECT_STORE,payload);await setActiveProjectId(payload.id);return payload;
+}
+async function deleteStoredProject(projectId){
+  if(!projectId)return await loadProjectList();
+  // Delete the project first, then remove all saved test sessions that belong to it.
+  // Each step is isolated so one missing/old IndexedDB store cannot silently block the UI refresh.
+  await idbDelete(EYELAB_PROJECT_STORE,projectId);
+  await deleteTestSessionsByProject(projectId).catch(err=>console.warn('Could not delete project test sessions:',err));
+  const list=await loadProjectList();
+  await setActiveProjectId(list[0]?.id||null).catch(err=>console.warn('Could not update active project:',err));
+  return list;
+}
+
+function compactStimulusForSession(stimulus){
+  return{
+    id:stimulus.id,order:stimulus.order,name:stimulus.name,industry:stimulus.industry||'',
+    type:stimulus.type,fileName:stimulus.fileName,displayDurationSec:stimulus.displayDurationSec,
+    durationMs:stimulus.durationMs||stimulus.displayDurationSec*1000,
+    aoiCount:(stimulus.aois||[]).length
+  };
+}
+function compactStimulusResultForStorage(result){
+  return{
+    stimulus:compactStimulusForSession(result.stimulus),
+    session:result.session,
+    aois:(result.aois||[]).map(a=>({...a})),
+    gazeData:(result.gazeData||[]).map(p=>({
+      timestamp:p.timestamp,videoTime:p.videoTime,screenX:p.screenX,screenY:p.screenY,
+      xNorm:p.xNorm,yNorm:p.yNorm,aoi:p.aoi||''
+    })),
+    fixations:(result.fixations||[]).map(f=>({
+      id:f.id,x:f.x,y:f.y,duration:f.duration,startTime:f.startTime,endTime:f.endTime,
+      videoTimeStart:f.videoTimeStart,videoTimeEnd:f.videoTimeEnd,points:f.points
+    }))
+  };
+}
+async function saveTestSessionRecord({sessionId,projectInfo,demographics,stimulusResults}){
+  if(!sessionId||!stimulusResults?.length)return null;
+  const activeProject=projectInfo?.id?projectInfo:(await loadStoredProject().catch(()=>null));
+  const resolvedProjectId=activeProject?.id||projectInfo?.id||'no_project';
+  const resolvedProjectName=activeProject?.name||projectInfo?.name||DEFAULT_PROJECT_NAME;
+  const safeSessionId=sessionId+'_'+resolvedProjectId;
+  const record={
+    id:safeSessionId,sessionId,createdAt:new Date().toISOString(),
+    projectId:resolvedProjectId,projectName:resolvedProjectName,
+    participantId:demographics?.participantId||'',participantName:demographics?.name||'',
+    demographics:{...demographics},
+    stimulusCount:stimulusResults.length,
+    totalSamples:stimulusResults.reduce((s,r)=>s+(r.session?.totalSamples||0),0),
+    totalFixations:stimulusResults.reduce((s,r)=>s+(r.session?.totalFixations||0),0),
+    stimulusResults:stimulusResults.map(compactStimulusResultForStorage)
+  };
+  await idbPut(EYELAB_TEST_STORE,record);
+  return record;
+}
+async function loadTestSessions(projectId=null){
+  const rows=await idbGetAll(EYELAB_TEST_STORE).catch(()=>[]);
+  const filtered=projectId?rows.filter(r=>r.projectId===projectId):rows;
+  return filtered.sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+}
+async function deleteTestSession(sessionId){
+  await idbDelete(EYELAB_TEST_STORE,sessionId);
+  return true;
+}
+async function deleteTestSessionsByProject(projectId){
+  if(!projectId)return 0;
+  const rows=await loadTestSessions(projectId).catch(()=>[]);
+  for(const r of rows){await idbDelete(EYELAB_TEST_STORE,r.id).catch(()=>null)}
+  return rows.length;
+}
+function exportSavedTestSessionsExcel(sessions,filenamePrefix='eyelab_all_saved_tests'){
+  const wb=XLSX.utils.book_new();
+  const overviewHeaders=['session_id','created_at','project_id','project_name','participant_id','participant_name','age','gender','education','email','stimulus_count','total_samples','total_fixations'];
+  const overviewRows=sessions.map(r=>[r.sessionId,r.createdAt,r.projectId,r.projectName,r.participantId,r.participantName,r.demographics?.age||'',r.demographics?.gender||'',r.demographics?.education||'',r.demographics?.email||'',r.stimulusCount||0,r.totalSamples||0,r.totalFixations||0]);
+  const wsOverview=XLSX.utils.aoa_to_sheet([overviewHeaders,...overviewRows]);
+  wsOverview['!cols']=overviewHeaders.map(h=>({wch:Math.max(14,h.length+2)}));
+  XLSX.utils.book_append_sheet(wb,wsOverview,'Saved Users');
+
+  const spssRows=[];
+  sessions.forEach(r=>{
+    (r.stimulusResults||[]).forEach(sr=>{
+      const row=buildSpssRow({sessionId:r.sessionId,demographics:r.demographics||{},stimulus:sr.stimulus,session:sr.session||{},aoiMetrics:sr.aois||[]});
+      row.project_id=r.projectId;row.project_name=r.projectName;row.test_created_at=r.createdAt;
+      spssRows.push(row);
+    });
+  });
+  const spssKeys=Array.from(new Set(spssRows.flatMap(r=>Object.keys(r))));
+  const wsSpss=XLSX.utils.aoa_to_sheet([spssKeys,...spssRows.map(r=>spssKeys.map(k=>r[k]??''))]);
+  wsSpss['!cols']=spssKeys.map(h=>({wch:Math.max(14,h.length+2)}));
+  XLSX.utils.book_append_sheet(wb,wsSpss,'All SPSS Ready');
+
+  const rawHeaders=['session_id','project_id','project_name','participant_id','participant_name','stimulus_id','stimulus_name','stimulus_industry','stimulus_type','sample_idx','timestamp_ms','stim_time_ms','screen_x_px','screen_y_px','x_norm','y_norm','inside_stim','aoi_hit'];
+  const rawRows=[];
+  sessions.forEach(r=>{
+    (r.stimulusResults||[]).forEach(sr=>{
+      (sr.gazeData||[]).forEach((g,i)=>{
+        const inside=(g.xNorm>=0&&g.xNorm<=1&&g.yNorm>=0&&g.yNorm<=1)?1:0;
+        rawRows.push([r.sessionId,r.projectId,r.projectName,r.participantId,r.participantName,sr.stimulus?.order,sr.stimulus?.name,sr.stimulus?.industry||'',sr.stimulus?.type,i+1,Math.round(g.timestamp||0),Math.round(g.videoTime||0),Math.round(g.screenX||0),Math.round(g.screenY||0),fmt(g.xNorm,4),fmt(g.yNorm,4),inside,g.aoi||'']);
+      });
+    });
+  });
+  const wsRaw=XLSX.utils.aoa_to_sheet([rawHeaders,...rawRows]);
+  wsRaw['!cols']=rawHeaders.map(h=>({wch:Math.max(12,h.length+2)}));
+  XLSX.utils.book_append_sheet(wb,wsRaw,'All Raw Samples');
+
+  const aoiHeaders=['session_id','project_id','participant_id','participant_name','stimulus_id','stimulus_name','stimulus_industry','aoi_id','aoi_name','hit_count','fixation_count','visit_count','revisit_count','total_dwell_ms','mean_fix_dur_ms','ttff_ms','pct_time','pct_time_active','attention_index'];
+  const aoiRows=[];
+  sessions.forEach(r=>{
+    (r.stimulusResults||[]).forEach(sr=>{
+      (sr.aois||[]).forEach(a=>aoiRows.push([r.sessionId,r.projectId,r.participantId,r.participantName,sr.stimulus?.order,sr.stimulus?.name,sr.stimulus?.industry||'',a.id,a.name,a.hitCount,a.fixationCount,a.visitCount,a.revisitCount,Math.round(a.totalDwellMs||0),fmt(a.meanFixationDurMs,1),a.timeToFirstFixationMs??'',fmt(a.pctTimeOnAoi,2),fmt(a.pctTimeOnAoiActive,2),fmt(a.attentionIndex,2)]));
+    });
+  });
+  const wsAoi=XLSX.utils.aoa_to_sheet([aoiHeaders,...aoiRows]);
+  wsAoi['!cols']=aoiHeaders.map(h=>({wch:Math.max(12,h.length+2)}));
+  XLSX.utils.book_append_sheet(wb,wsAoi,'All AOI Metrics');
+
+  XLSX.writeFile(wb,`${filenamePrefix}_${new Date().toISOString().slice(0,10)}.xlsx`);
 }
 
 
@@ -3756,7 +3935,7 @@ function buildSpssRow({sessionId,demographics,stimulus,session,aoiMetrics}){
   const row={
     session_id:sessionId,participant_id:demographics.participantId,name:demographics.name,
     age:Number(demographics.age)||0,gender_code:g,education_code:e,
-    stimulus_id:stimulus.order,stimulus_name:stimulus.name,stimulus_type:stimulus.type,
+    stimulus_id:stimulus.order,stimulus_name:stimulus.name,stimulus_industry:stimulus.industry||'',stimulus_type:stimulus.type,
     stimulus_duration_ms:Math.round(session.videoDurationMs||0),
     total_samples:session.totalSamples||0,total_fixations:session.totalFixations||0,
     total_saccades:session.totalSaccades||0,
@@ -3804,11 +3983,11 @@ function exportToExcel({sessionId,demographics,stimulusResults}){
     ['Education',demographics.education],
     ['Email',demographics.email||'—'],
     ['',''],['─── STIMULI ───',''],
-    ['#','Name','Type','Duration (ms)','Samples','Fixations','Engagement %','Video Focus %','AOI Coverage %'],
-    ...stimulusResults.map(r=>[r.stimulus.order,r.stimulus.name,r.stimulus.type,Math.round(r.session.videoDurationMs),r.session.totalSamples,r.session.totalFixations,fmt(r.session.engagementScore,2),fmt(r.session.videoFocus,2),fmt(r.session.aoiCoverage,2)]),
+    ['#','Name','Industry','Type','Duration (ms)','Samples','Fixations','Engagement %','Video Focus %','AOI Coverage %'],
+    ...stimulusResults.map(r=>[r.stimulus.order,r.stimulus.name,r.stimulus.industry||'',r.stimulus.type,Math.round(r.session.videoDurationMs),r.session.totalSamples,r.session.totalFixations,fmt(r.session.engagementScore,2),fmt(r.session.videoFocus,2),fmt(r.session.aoiCoverage,2)]),
   ];
   const ws1=XLSX.utils.aoa_to_sheet(summary);
-  ws1['!cols']=[{wch:36},{wch:32},{wch:12},{wch:14},{wch:12},{wch:12},{wch:14},{wch:14},{wch:16}];
+  ws1['!cols']=[{wch:36},{wch:32},{wch:18},{wch:12},{wch:14},{wch:12},{wch:12},{wch:14},{wch:14},{wch:16}];
   XLSX.utils.book_append_sheet(wb,ws1,'Overview');
 
   // SPSS-Ready: long format, one row per (participant × stimulus)
@@ -3827,6 +4006,7 @@ function exportToExcel({sessionId,demographics,stimulusResults}){
       ['─── STIMULUS ───',''],
       ['Order',r.stimulus.order],
       ['Name',r.stimulus.name],
+      ['Industry',r.stimulus.industry||''],
       ['Type',r.stimulus.type],
       ['File',r.stimulus.fileName],
       ['Duration (ms)',Math.round(r.session.videoDurationMs)],
@@ -3853,8 +4033,8 @@ function exportToExcel({sessionId,demographics,stimulusResults}){
     XLSX.utils.book_append_sheet(wb,wsSum,`${sName}_Sum`);
 
     // Raw gaze
-    const rh=['sample_idx','timestamp_ms','stim_time_ms','screen_x_px','screen_y_px','x_norm','y_norm','inside_stim','aoi_hit'];
-    const rr=r.gazeData.map((p,i)=>[i+1,Math.round(p.timestamp),Math.round(p.videoTime),Math.round(p.screenX),Math.round(p.screenY),fmt(p.xNorm,4),fmt(p.yNorm,4),(p.xNorm>=0&&p.xNorm<=1&&p.yNorm>=0&&p.yNorm<=1)?1:0,p.aoi||'']);
+    const rh=['sample_idx','timestamp_ms','stim_time_ms','screen_x_px','screen_y_px','x_norm','y_norm','inside_stim','aoi_hit','stimulus_industry'];
+    const rr=r.gazeData.map((p,i)=>[i+1,Math.round(p.timestamp),Math.round(p.videoTime),Math.round(p.screenX),Math.round(p.screenY),fmt(p.xNorm,4),fmt(p.yNorm,4),(p.xNorm>=0&&p.xNorm<=1&&p.yNorm>=0&&p.yNorm<=1)?1:0,p.aoi||'',r.stimulus.industry||'']);
     const wsRaw=XLSX.utils.aoa_to_sheet([rh,...rr]);
     wsRaw['!cols']=rh.map(()=>({wch:14}));
     XLSX.utils.book_append_sheet(wb,wsRaw,`${sName}_Raw`);
@@ -3881,13 +4061,13 @@ function exportToCSV({sessionId,demographics,stimulusResults}){
 }
 
 function exportRawCSV({sessionId,demographics,stimulusResults}){
-  const cols=['session_id','participant_id','name','age','gender','education','stimulus_id','stimulus_name','stimulus_type','sample_idx','timestamp_ms','stim_time_ms','screen_x_px','screen_y_px','x_norm','y_norm','inside_stim','aoi_hit'];
+  const cols=['session_id','participant_id','name','age','gender','education','stimulus_id','stimulus_name','stimulus_industry','stimulus_type','sample_idx','timestamp_ms','stim_time_ms','screen_x_px','screen_y_px','x_norm','y_norm','inside_stim','aoi_hit'];
   const lines=[cols.join(',')];
   const sn=(demographics.name||'').replace(/"/g,'""');
   stimulusResults.forEach(r=>{
     r.gazeData.forEach((p,i)=>{
       const inside=(p.xNorm>=0&&p.xNorm<=1&&p.yNorm>=0&&p.yNorm<=1)?1:0;
-      lines.push([sessionId,demographics.participantId,`"${sn}"`,demographics.age||'',demographics.gender||'',demographics.education||'',r.stimulus.order,`"${(r.stimulus.name||'').replace(/"/g,'""')}"`,r.stimulus.type,i+1,Math.round(p.timestamp),Math.round(p.videoTime),Math.round(p.screenX),Math.round(p.screenY),fmt(p.xNorm,4),fmt(p.yNorm,4),inside,p.aoi||''].join(','));
+      lines.push([sessionId,demographics.participantId,`"${sn}"`,demographics.age||'',demographics.gender||'',demographics.education||'',r.stimulus.order,`"${(r.stimulus.name||'').replace(/"/g,'""')}"`,`"${(r.stimulus.industry||'').replace(/"/g,'""')}"`,r.stimulus.type,i+1,Math.round(p.timestamp),Math.round(p.videoTime),Math.round(p.screenX),Math.round(p.screenY),fmt(p.xNorm,4),fmt(p.yNorm,4),inside,p.aoi||''].join(','));
     });
   });
   const blob=new Blob(['\uFEFF'+lines.join('\n')],{type:'text/csv;charset=utf-8;'});
@@ -4012,7 +4192,7 @@ function WelcomePhase({onNext,demographics,setDemographics}){
 // ============================================================
 // PHASE 02 — UPLOAD MULTI-STIMULUS
 // ============================================================
-function UploadPhase({onNext,stimuli,setStimuli}){
+function UploadPhase({onNext,stimuli,setStimuli,projectInfo,onProjectNameChange,onCreateProject,onSaveProject}){
   const [dragOver,setDragOver]=useState(false);
   const inputRef=useRef(null);
   const idCounterRef=useRef(stimuli.reduce((m,s)=>Math.max(m,s.id),0));
@@ -4045,7 +4225,7 @@ function UploadPhase({onNext,stimuli,setStimuli}){
         name:f.name.replace(/\.[^.]+$/,''),
         fileName:f.name,size:f.size,
         displayDurationSec:Math.round(durationSec*10)/10,
-        dataUrl,aois:[],gazeData:[],durationMs:0,
+        industry:'',dataUrl,aois:[],gazeData:[],durationMs:0,
       });
     }
     setStimuli(prev=>{
@@ -4075,6 +4255,7 @@ function UploadPhase({onNext,stimuli,setStimuli}){
   };
 
   const updateName=(id,name)=>setStimuli(prev=>prev.map(s=>s.id===id?{...s,name}:s));
+  const updateIndustry=(id,industry)=>setStimuli(prev=>prev.map(s=>s.id===id?{...s,industry}:s));
   const updateDur=(id,sec)=>setStimuli(prev=>prev.map(s=>s.id===id?{...s,displayDurationSec:Math.max(1,Math.min(120,Number(sec)||1))}:s));
 
   const totalSec=stimuli.reduce((s,x)=>s+x.displayDurationSec,0);
@@ -4083,7 +4264,14 @@ function UploadPhase({onNext,stimuli,setStimuli}){
     <div>
       <div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-[0.3em] mb-4">PHASE 02 / STIMULUS UPLOAD · MULTI</div>
       <h2 className="font-display text-4xl mb-2">Tải lên các <span className="italic text-[var(--accent)]">stimuli</span></h2>
-      <p className="text-[var(--text-2)] mb-6 max-w-3xl">Tải lên một hoặc nhiều file <span className="font-mono text-[var(--accent)]">ảnh (PNG/JPG/WebP)</span> hoặc <span className="font-mono text-[var(--accent)]">video (MP4/WebM/MOV)</span>. Mỗi file là một stimulus riêng, được trình bày tuần tự với AOI và dữ liệu eye-tracking độc lập. File chỉ xử lý cục bộ.</p>
+      <p className="text-[var(--text-2)] mb-6 max-w-3xl">Tải lên một hoặc nhiều file <span className="font-mono text-[var(--accent)]">ảnh (PNG/JPG/WebP)</span> hoặc <span className="font-mono text-[var(--accent)]">video (MP4/WebM/MOV)</span>. Mỗi file là một stimulus riêng, được trình bày tuần tự với AOI, tên ngành và dữ liệu eye-tracking độc lập. File chỉ xử lý cục bộ trong IndexedDB.</p>
+
+      <div className="panel p-4 mb-6">
+        <div className="grid md:grid-cols-3 gap-3 items-end">
+          <div className="md:col-span-2"><label className="font-mono text-[10px] text-[var(--text-2)] uppercase tracking-widest block mb-2">Tên project</label><input className="input-base" value={projectInfo?.name||''} onChange={e=>onProjectNameChange?.(e.target.value)} placeholder="VD: AI Ads — ngành giày / mỹ phẩm" /></div>
+          <div className="flex gap-2"><button onClick={onSaveProject} className="btn-ghost flex-1">Lưu project</button><button onClick={onCreateProject} className="btn-primary flex-1">+ Project mới</button></div>
+        </div>
+      </div>
 
       <div className={`drop-zone p-12 text-center cursor-pointer relative ${dragOver?'drag-over':''}`} onClick={()=>inputRef.current?.click()} onDragOver={e=>{e.preventDefault();setDragOver(true)}} onDragLeave={()=>setDragOver(false)} onDrop={e=>{e.preventDefault();setDragOver(false);addFiles(e.dataTransfer.files)}}>
         <div className="corner-tl"></div><div className="corner-tr"></div><div className="corner-bl"></div><div className="corner-br"></div>
@@ -4104,9 +4292,10 @@ function UploadPhase({onNext,stimuli,setStimuli}){
               <div key={s.id} className="stim-row">
                 <div className="font-mono text-[10px] text-[var(--text-3)] w-8">#{String(s.order).padStart(2,'0')}</div>
                 {s.type==='image'?(<img src={s.url} className="stim-thumb" alt="" />):(<video src={s.url} className="stim-thumb" muted />)}
-                <div className="flex-1 min-w-0">
-                  <input className="input-base" value={s.name} onChange={e=>updateName(s.id,e.target.value)} style={{padding:'6px 10px',fontSize:12}} />
-                  <div className="font-mono text-[10px] text-[var(--text-3)] mt-1 truncate">{s.fileName} · {(s.size/1024/1024).toFixed(2)} MB · {s.type}</div>
+                <div className="flex-1 min-w-0 space-y-2">
+                  <input className="input-base" value={s.name} onChange={e=>updateName(s.id,e.target.value)} placeholder="Tên stimulus" style={{padding:'6px 10px',fontSize:12}} />
+                  <input className="input-base" value={s.industry||''} onChange={e=>updateIndustry(s.id,e.target.value)} placeholder="Tên ngành — VD: Footwear, Cosmetics, Food..." style={{padding:'6px 10px',fontSize:12}} />
+                  <div className="font-mono text-[10px] text-[var(--text-3)] mt-1 truncate">{s.fileName} · {(s.size/1024/1024).toFixed(2)} MB · {s.type} · ngành: {s.industry||'—'}</div>
                 </div>
                 <div className="flex flex-col items-start gap-1">
                   <label className="font-mono text-[9px] text-[var(--text-3)] uppercase">{s.type==='image'?'Display (s)':'Length (s)'}</label>
@@ -4116,7 +4305,7 @@ function UploadPhase({onNext,stimuli,setStimuli}){
                   <button onClick={()=>move(s.id,-1)} disabled={i===0} className="btn-ghost" style={{padding:'2px 8px',fontSize:11}}>↑</button>
                   <button onClick={()=>move(s.id,1)} disabled={i===stimuli.length-1} className="btn-ghost" style={{padding:'2px 8px',fontSize:11}}>↓</button>
                 </div>
-                <button onClick={()=>remove(s.id)} className="text-[var(--text-3)] hover:text-[var(--danger)] text-2xl leading-none px-2">×</button>
+                <button onClick={()=>remove(s.id)} className="btn-danger" style={{padding:'6px 10px',fontSize:11}}>Xoá</button>
               </div>
             ))}
           </div>
@@ -4125,7 +4314,7 @@ function UploadPhase({onNext,stimuli,setStimuli}){
 
       <div className="mt-6 flex justify-between items-center gap-4">
         <div className="font-mono text-[10px] text-[var(--text-3)]">{stimuli.length===0?'Thêm ít nhất 1 stimulus để tiếp tục':`Sẵn sàng với ${stimuli.length} stimulus${stimuli.length>1?'s':''}`}</div>
-        <button onClick={onNext} disabled={stimuli.length===0} className="btn-primary">→ Tiếp tục đến Hiệu chuẩn</button>
+        <div className="flex gap-2"><button onClick={onSaveProject} disabled={stimuli.length===0} className="btn-ghost">Lưu thay đổi</button><button onClick={onNext} disabled={stimuli.length===0} className="btn-primary">→ Tiếp tục đến AOI</button></div>
       </div>
     </div>
   );
@@ -4206,7 +4395,7 @@ function CalibrationPhase({onNext,gazeReady,setGazeReady}){
 // ============================================================
 // PHASE 04 — AOI (multi-stimulus, with stimulus selector)
 // ============================================================
-function AoiPhase({onNext,stimuli,updateStimulus}){
+function AoiPhase({onNext,stimuli,updateStimulus,onEditStimuli,onCreateProject,onSaveProject,projectInfo,onProjectNameChange}){
   const [activeIdx,setActiveIdx]=useState(0);
   // Admin AOI editing does not need live gaze tracking.
   useEffect(()=>{},[]);
@@ -4220,7 +4409,13 @@ function AoiPhase({onNext,stimuli,updateStimulus}){
     <div>
       <div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-[0.3em] mb-4">PHASE 04 / AREAS OF INTEREST · {stimuli.length} STIMULI</div>
       <h2 className="font-display text-4xl mb-2">Định nghĩa vùng quan tâm</h2>
-      <p className="text-[var(--text-2)] mb-6">Định nghĩa AOI cho <span className="text-[var(--accent)]">từng stimulus</span>. Vẽ AOI bằng cách kéo chuột trên ảnh/video. Với video, có thể giới hạn thời gian xuất hiện cho từng AOI.</p>
+      <p className="text-[var(--text-2)] mb-4">Định nghĩa AOI cho <span className="text-[var(--accent)]">từng stimulus</span>. Vẽ AOI bằng cách kéo chuột trên ảnh/video. Với video, có thể giới hạn thời gian xuất hiện cho từng AOI.</p>
+      <div className="panel p-4 mb-6">
+        <div className="grid md:grid-cols-3 gap-3 items-end">
+          <div className="md:col-span-2"><label className="font-mono text-[10px] text-[var(--text-2)] uppercase tracking-widest block mb-2">Project hiện tại</label><input className="input-base" value={projectInfo?.name||''} onChange={e=>onProjectNameChange?.(e.target.value)} /></div>
+          <div className="flex gap-2"><button onClick={onEditStimuli} className="btn-ghost flex-1">Sửa / xoá stimulus</button><button onClick={onCreateProject} className="btn-primary flex-1">+ Project mới</button></div>
+        </div>
+      </div>
 
       {/* Stimulus tabs */}
       <div className="flex gap-2 mb-6 flex-wrap">
@@ -4240,7 +4435,8 @@ function AoiPhase({onNext,stimuli,updateStimulus}){
         </div>
         <div className="flex gap-3 items-center">
           <div className="font-mono text-[10px] text-[var(--text-3)]">{allHaveAoi?'✓ Tất cả stimuli đã có AOI':`${stimuli.filter(s=>s.aois.length>0).length}/${stimuli.length} stimuli có AOI`}</div>
-          <button onClick={onNext} disabled={!allHaveAoi} className="btn-primary">→ Bắt đầu ghi dữ liệu</button>
+          <button onClick={onSaveProject} className="btn-ghost">Lưu project</button>
+          <button onClick={onNext} disabled={!allHaveAoi} className="btn-primary">→ Hoàn tất setup</button>
         </div>
       </div>
     </div>
@@ -4289,7 +4485,7 @@ function AoiEditor({stimulus,onChange}){
       <div className="col-span-12 lg:col-span-8">
         <div className="panel">
           <div className="panel-header">
-            <span>Stimulus #{stimulus.order} · {stimulus.name}</span>
+            <span>Stimulus #{stimulus.order} · {stimulus.name} · ngành: {stimulus.industry||'—'}</span>
             <span className="font-mono">{stimulus.type==='video'?`t = ${fmt(currentTime,2)}s / ${fmt(mediaDur,2)}s · `:''}{stimulus.type==='image'?`Display ${fmt(stimulus.displayDurationSec,1)}s · `:''}Active AOIs: {activeNow.length}</span>
           </div>
           <div ref={canvasRef} className="relative bg-black select-none" style={{cursor:'crosshair'}} onMouseDown={onMD} onMouseMove={onMM} onMouseUp={onMU} onMouseLeave={()=>dragging&&onMU()}>
@@ -4746,8 +4942,11 @@ function Stat({label,value,mono,color}){return(<div><div className="font-mono te
 // ============================================================
 // PHASE 06 — RESULTS (per-stimulus tabs + aggregate, static cached heatmap)
 // ============================================================
-function ResultsPhase({sessionId,demographics,stimuli,onRestart}){
+function ResultsPhase({sessionId,demographics,stimuli,onRestart,projectInfo}){
   const [activeIdx,setActiveIdx]=useState(0);
+  const [savedTestAt,setSavedTestAt]=useState(null);
+  const [saveTestError,setSaveTestError]=useState(null);
+  const savedTestRef=useRef(false);
   const colors=['#F59E0B','#06B6D4','#10B981','#EC4899','#8B5CF6','#EF4444'];
 
   useEffect(()=>{try{window.GazeCloudAPI?.StopEyeTracking?.()}catch(e){}},[]);
@@ -4758,6 +4957,14 @@ function ResultsPhase({sessionId,demographics,stimuli,onRestart}){
     const metrics=computeMetrics(s.gazeData,fixations,s.aois,s.durationMs||s.displayDurationSec*1000);
     return{stimulus:s,fixations,gazeData:s.gazeData,session:metrics.session,aois:metrics.aois};
   }),[stimuli]);
+
+  useEffect(()=>{
+    if(savedTestRef.current||!stimulusResults.length)return;
+    savedTestRef.current=true;
+    saveTestSessionRecord({sessionId,projectInfo,demographics,stimulusResults})
+      .then(r=>setSavedTestAt(r?.createdAt||new Date().toISOString()))
+      .catch(e=>{console.error(e);setSaveTestError(e.message||String(e))});
+  },[sessionId,projectInfo?.id,projectInfo?.name,demographics,stimulusResults]);
 
   const handleXlsx=()=>exportToExcel({sessionId,demographics,stimulusResults});
   const handleSpssCsv=()=>exportToCSV({sessionId,demographics,stimulusResults});
@@ -4793,6 +5000,7 @@ function ResultsPhase({sessionId,demographics,stimuli,onRestart}){
           <div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-[0.3em] mb-4">PHASE 06 / ANALYSIS · {stimuli.length} STIMULI</div>
           <h2 className="font-display text-4xl mb-1">Kết quả phiên ghi</h2>
           <div className="font-mono text-xs text-[var(--text-2)]">{sessionId} · {demographics.participantId} · {demographics.name} ({demographics.age}, {demographics.gender})</div>
+          <div className={`font-mono text-[10px] mt-2 ${saveTestError?'text-[var(--danger)]':'text-[var(--success)]'}`}>{saveTestError?('Lưu dữ liệu test lỗi: '+saveTestError):(savedTestAt?'✓ Đã lưu dữ liệu test vào Admin mode':'Đang lưu dữ liệu test vào Admin mode…')}</div>
         </div>
         <div className="flex gap-2 flex-wrap">
           <button onClick={onRestart} className="btn-ghost">↻ Session mới</button>
@@ -4846,47 +5054,71 @@ function StimulusResults({result,colors}){
   const heatmapRef=useRef(null);
   const mediaRef=useRef(null);
   const [mediaSize,setMediaSize]=useState({w:0,h:0});
+  const [heatmapMode,setHeatmapMode]=useState('static');
+  const [dynamicMs,setDynamicMs]=useState(0);
+  const [dynamicPlaying,setDynamicPlaying]=useState(false);
+  const [exportingDynamic,setExportingDynamic]=useState(false);
   const heatmapCacheRef=useRef({key:null,canvas:null});
+  const dynamicWindowMs=1500;
 
-  // Compute the low-res heatmap once per gazeData reference (cached)
+  useEffect(()=>{setHeatmapMode('static');setDynamicMs(0);setDynamicPlaying(false)},[stimulus.id]);
+
+  const validGaze=useMemo(()=>gazeData.filter(p=>p.xNorm>=0&&p.xNorm<=1&&p.yNorm>=0&&p.yNorm<=1),[gazeData]);
+  const stimDurMs=stimulus.durationMs||stimulus.displayDurationSec*1000;
+  const dynamicFrameKey=Math.round(dynamicMs/120);
+  const displayGaze=useMemo(()=>{
+    if(heatmapMode==='static')return validGaze;
+    const t=dynamicFrameKey*120;
+    return validGaze.filter(p=>p.videoTime>=t-dynamicWindowMs&&p.videoTime<=t);
+  },[validGaze,heatmapMode,dynamicFrameKey]);
+
+  // Compute the low-res heatmap once per gaze slice. Static result is cached.
   const heatmapLowRes=useMemo(()=>{
-    const key=stimulus.id+'_'+gazeData.length;
-    if(heatmapCacheRef.current.key===key&&heatmapCacheRef.current.canvas){
-      return heatmapCacheRef.current.canvas;
+    if(heatmapMode==='static'){
+      const key=stimulus.id+'_'+gazeData.length+'_static';
+      if(heatmapCacheRef.current.key===key&&heatmapCacheRef.current.canvas)return heatmapCacheRef.current.canvas;
+      const lowRes=buildHeatmapLowRes(validGaze,400,225);
+      heatmapCacheRef.current={key,canvas:lowRes};
+      return lowRes;
     }
-    const valid=gazeData.filter(p=>p.xNorm>=0&&p.xNorm<=1&&p.yNorm>=0&&p.yNorm<=1);
-    const lowRes=buildHeatmapLowRes(valid,400,225);
-    heatmapCacheRef.current={key,canvas:lowRes};
-    return lowRes;
-  },[stimulus.id,gazeData]);
+    return buildHeatmapLowRes(displayGaze,400,225);
+  },[stimulus.id,gazeData.length,validGaze,displayGaze,heatmapMode]);
+
+  useEffect(()=>{
+    if(!dynamicPlaying)return;
+    let raf=null;
+    const base=performance.now()-dynamicMs;
+    const tick=()=>{
+      const dur=Math.max(1,stimDurMs);
+      setDynamicMs((performance.now()-base)%dur);
+      raf=requestAnimationFrame(tick);
+    };
+    raf=requestAnimationFrame(tick);
+    return()=>raf&&cancelAnimationFrame(raf);
+  },[dynamicPlaying,stimDurMs]);
+
+  useEffect(()=>{
+    if(heatmapMode!=='dynamic'||stimulus.type!=='video')return;
+    const el=mediaRef.current;if(!el)return;
+    const target=dynamicMs/1000;
+    if(Number.isFinite(target)&&Math.abs((el.currentTime||0)-target)>0.18){try{el.currentTime=target}catch(e){}}
+  },[heatmapMode,dynamicMs,stimulus.type]);
 
   // Track media element size; repaint heatmap on resize
   useEffect(()=>{
     const el=mediaRef.current;
     if(!el)return;
-    const updateSize=()=>{
-      const w=el.clientWidth,h=el.clientHeight;
-      if(w&&h){setMediaSize({w,h})}
-    };
+    const updateSize=()=>{const w=el.clientWidth,h=el.clientHeight;if(w&&h)setMediaSize({w,h})};
     updateSize();
     if(stimulus.type==='image'){
       if(el.complete)updateSize();
       else el.addEventListener('load',updateSize);
-    }else{
-      el.addEventListener('loadedmetadata',updateSize);
-    }
-    const ro=new ResizeObserver(updateSize);
-    ro.observe(el);
-    window.addEventListener('resize',updateSize);
-    return()=>{
-      ro.disconnect();
-      window.removeEventListener('resize',updateSize);
-      if(stimulus.type==='image')el.removeEventListener('load',updateSize);
-      else el.removeEventListener('loadedmetadata',updateSize);
-    };
+    }else el.addEventListener('loadedmetadata',updateSize);
+    const ro=new ResizeObserver(updateSize);ro.observe(el);window.addEventListener('resize',updateSize);
+    return()=>{ro.disconnect();window.removeEventListener('resize',updateSize);if(stimulus.type==='image')el.removeEventListener('load',updateSize);else el.removeEventListener('loadedmetadata',updateSize)};
   },[stimulus.id,stimulus.type]);
 
-  // Paint cached heatmap onto target canvas when size or low-res cache changes
+  // Paint current heatmap slice onto target canvas
   useEffect(()=>{
     if(!heatmapRef.current||!mediaSize.w||!mediaSize.h)return;
     paintHeatmapToTarget(heatmapRef.current,heatmapLowRes,mediaSize.w,mediaSize.h);
@@ -4895,16 +5127,80 @@ function StimulusResults({result,colors}){
   const sortedAois=[...aois].map((a,i)=>({...a,color:colors[i%colors.length]})).sort((a,b)=>b.totalDwellMs-a.totalDwellMs);
 
   const timelineBins=useMemo(()=>{
-    const bins=60;const dur=stimulus.durationMs||stimulus.displayDurationSec*1000;const bs=dur/bins;
+    const bins=60;const dur=stimDurMs;const bs=dur/bins;
     return Array.from({length:bins},(_,i)=>{const t0=i*bs,t1=(i+1)*bs;const ib=gazeData.filter(p=>p.videoTime>=t0&&p.videoTime<t1);const ia=ib.filter(p=>p.aoi!=null).length;return{t:(t0+t1)/2,count:ib.length,aoi:ia}});
-  },[gazeData,stimulus.durationMs,stimulus.displayDurationSec]);
+  },[gazeData,stimDurMs]);
 
-  const stimDurMs=stimulus.durationMs||stimulus.displayDurationSec*1000;
+  const getExportSize=(source)=>{
+    const sw=source?.videoWidth||source?.naturalWidth||mediaSize.w||1280;
+    const sh=source?.videoHeight||source?.naturalHeight||mediaSize.h||720;
+    const outW=Math.min(1920,Math.max(900,sw));
+    const outH=Math.round(outW*(sh/sw));
+    return{w:outW,h:outH};
+  };
+  const drawContained=(ctx,source,w,h)=>{
+    ctx.fillStyle='#000';ctx.fillRect(0,0,w,h);
+    const sw=source?.videoWidth||source?.naturalWidth||w;
+    const sh=source?.videoHeight||source?.naturalHeight||h;
+    const scale=Math.min(w/sw,h/sh);
+    const dw=sw*scale,dh=sh*scale,dx=(w-dw)/2,dy=(h-dh)/2;
+    try{ctx.drawImage(source,dx,dy,dw,dh)}catch(e){}
+    return{dx,dy,dw,dh};
+  };
+  const drawAoiBoxes=(ctx,rect)=>{
+    ctx.save();ctx.lineWidth=Math.max(2,rect.dw/500);ctx.font=`${Math.max(14,Math.round(rect.dw/70))}px JetBrains Mono, monospace`;ctx.textBaseline='top';
+    aois.forEach((a,i)=>{
+      const col=colors[i%colors.length];const x=rect.dx+a.x*rect.dw,y=rect.dy+a.y*rect.dh,w=a.w*rect.dw,h=a.h*rect.dh;
+      ctx.strokeStyle=col;ctx.globalAlpha=0.95;ctx.strokeRect(x,y,w,h);
+      const label=a.name||`AOI ${i+1}`;const tw=ctx.measureText(label).width+10;ctx.globalAlpha=0.95;ctx.fillStyle=col;ctx.fillRect(x,Math.max(0,y-22),tw,22);ctx.fillStyle='#111';ctx.fillText(label,x+5,Math.max(0,y-20));
+    });
+    ctx.restore();
+  };
+  const drawComposite=(ctx,source,points,modeLabel)=>{
+    const w=ctx.canvas.width,h=ctx.canvas.height;
+    const rect=drawContained(ctx,source,w,h);
+    const low=buildHeatmapLowRes(points,400,225);
+    ctx.save();ctx.globalCompositeOperation='screen';ctx.globalAlpha=0.86;ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';ctx.drawImage(low,rect.dx,rect.dy,rect.dw,rect.dh);ctx.restore();
+    drawAoiBoxes(ctx,rect);
+    ctx.save();ctx.font='16px JetBrains Mono, monospace';ctx.fillStyle='rgba(0,0,0,0.55)';ctx.fillRect(14,14,Math.min(w-28,620),32);ctx.fillStyle='#fff';ctx.fillText(`${modeLabel} · ${stimulus.name} · ${stimulus.industry||'No industry'}`,24,23);ctx.restore();
+  };
+  const ensureImage=()=>new Promise((resolve,reject)=>{const img=new Image();img.onload=()=>resolve(img);img.onerror=reject;img.src=stimulus.url});
+  const ensureVideoMetadata=()=>new Promise((resolve,reject)=>{const v=document.createElement('video');v.muted=true;v.playsInline=true;v.preload='auto';v.onloadedmetadata=()=>resolve(v);v.onerror=reject;v.src=stimulus.url;v.load()});
+  const seekVideo=(v,t)=>new Promise(resolve=>{let done=false;const finish=()=>{if(done)return;done=true;v.removeEventListener('seeked',finish);resolve()};v.addEventListener('seeked',finish);try{v.currentTime=t}catch(e){finish()}setTimeout(finish,800)});
+
+  const downloadStaticHeatmap=async()=>{
+    const source=stimulus.type==='image'?await ensureImage():mediaRef.current;
+    const {w,h}=getExportSize(source);const c=document.createElement('canvas');c.width=w;c.height=h;
+    drawComposite(c.getContext('2d'),source,validGaze,'STATIC HEATMAP');
+    c.toBlob(blob=>blob&&downloadBlob(blob,`static_heatmap_${slug(stimulus.name)}.png`),'image/png');
+  };
+  const downloadDynamicHeatmap=async()=>{
+    if(!window.MediaRecorder){alert('Trình duyệt này không hỗ trợ xuất dynamic heatmap WebM. Hãy dùng Chrome/Edge mới.');return}
+    setExportingDynamic(true);
+    try{
+      const source=stimulus.type==='image'?await ensureImage():await ensureVideoMetadata();
+      const {w,h}=getExportSize(source);const c=document.createElement('canvas');c.width=w;c.height=h;const ctx=c.getContext('2d');
+      const fps=12,step=1000/fps,dur=Math.max(1000,Math.min(stimDurMs,(source.duration?source.duration*1000:stimDurMs)||stimDurMs));
+      const mime=MediaRecorder.isTypeSupported('video/webm;codecs=vp9')?'video/webm;codecs=vp9':(MediaRecorder.isTypeSupported('video/webm')?'video/webm':'');
+      const stream=c.captureStream(fps);const chunks=[];const rec=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);
+      const done=new Promise(resolve=>{rec.ondataavailable=e=>{if(e.data?.size)chunks.push(e.data)};rec.onstop=resolve});
+      rec.start();
+      for(let t=0;t<=dur;t+=step){
+        if(stimulus.type==='video')await seekVideo(source,Math.min((source.duration||dur/1000)-0.05,t/1000));
+        const slice=validGaze.filter(p=>p.videoTime>=t-dynamicWindowMs&&p.videoTime<=t);
+        drawComposite(ctx,source,slice,`DYNAMIC HEATMAP · ${fmt(t/1000,1)}s`);
+        await sleep(step);
+      }
+      rec.stop();await done;stream.getTracks().forEach(tr=>tr.stop());
+      downloadBlob(new Blob(chunks,{type:mime||'video/webm'}),`dynamic_heatmap_${slug(stimulus.name)}.webm`);
+    }catch(e){alert('Không xuất được dynamic heatmap: '+(e.message||e))}
+    finally{setExportingDynamic(false)}
+  };
 
   return(
     <div>
       <div className="font-mono text-xs text-[var(--text-2)] mb-4">
-        <span className="text-[var(--accent)]">Stimulus #{stimulus.order}</span> · {stimulus.name} · {stimulus.type} · {stimulus.fileName}
+        <span className="text-[var(--accent)]">Stimulus #{stimulus.order}</span> · {stimulus.name} · ngành: {stimulus.industry||'—'} · {stimulus.type} · {stimulus.fileName}
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-4">
@@ -4930,7 +5226,7 @@ function StimulusResults({result,colors}){
       <div className="grid grid-cols-12 gap-6">
         <div className="col-span-12 lg:col-span-8">
           <div className="panel">
-            <div className="panel-header"><span>Attention Heatmap (Static)</span><span className="font-mono">N = {gazeData.filter(p=>p.xNorm>=0&&p.xNorm<=1).length} · 400×225 · cached</span></div>
+            <div className="panel-header"><span>{heatmapMode==='static'?'Attention Heatmap (Static)':'Attention Heatmap (Dynamic)'}</span><span className="font-mono">N = {displayGaze.length} / {validGaze.length}</span></div>
             <div className="relative bg-black">
               {stimulus.type==='video'?(
                 <video ref={mediaRef} src={stimulus.url} muted controls className="block w-full" style={{maxHeight:'60vh'}} />
@@ -4940,7 +5236,14 @@ function StimulusResults({result,colors}){
               <canvas ref={heatmapRef} className="absolute inset-0 w-full h-full pointer-events-none" style={{mixBlendMode:'screen',opacity:0.85}} />
               <div className="absolute inset-0 pointer-events-none">{aois.map((a,i)=>(<div key={a.id} className="absolute border" style={{left:`${a.x*100}%`,top:`${a.y*100}%`,width:`${a.w*100}%`,height:`${a.h*100}%`,borderColor:colors[i%colors.length]+'cc'}}><div className="absolute -top-5 left-0 font-mono text-[10px] px-1.5 py-0.5 text-black font-bold" style={{background:colors[i%colors.length]}}>{a.name}</div></div>))}</div>
             </div>
-            <div className="p-3 font-mono text-[10px] text-[var(--text-3)] flex items-center justify-between"><span>LOW ←</span><div className="flex-1 mx-3 h-1.5" style={{background:'linear-gradient(90deg,rgb(20,60,180),rgb(0,200,255),rgb(0,240,0),rgb(255,255,0),rgb(255,55,0))'}}></div><span>→ HIGH</span></div>
+            <div className="p-3 space-y-3">
+              <div className="font-mono text-[10px] text-[var(--text-3)] flex items-center justify-between"><span>LOW ←</span><div className="flex-1 mx-3 h-1.5" style={{background:'linear-gradient(90deg,rgb(20,60,180),rgb(0,200,255),rgb(0,240,0),rgb(255,255,0),rgb(255,55,0))'}}></div><span>→ HIGH</span></div>
+              <div className="flex flex-wrap gap-2 items-center justify-between">
+                <div className="flex gap-2 flex-wrap"><button onClick={()=>{setHeatmapMode('static');setDynamicPlaying(false)}} className={heatmapMode==='static'?'btn-primary':'btn-ghost'}>Static</button><button onClick={()=>setHeatmapMode('dynamic')} className={heatmapMode==='dynamic'?'btn-primary':'btn-ghost'}>Dynamic</button>{heatmapMode==='dynamic'&&<button onClick={()=>setDynamicPlaying(v=>!v)} className="btn-ghost">{dynamicPlaying?'Pause':'Play'}</button>}</div>
+                <div className="flex gap-2 flex-wrap"><button onClick={downloadStaticHeatmap} className="btn-ghost">↓ Static PNG</button><button onClick={downloadDynamicHeatmap} disabled={exportingDynamic} className="btn-primary">{exportingDynamic?'Đang xuất…':'↓ Dynamic WebM'}</button></div>
+              </div>
+              {heatmapMode==='dynamic'&&(<div className="flex items-center gap-3 font-mono text-[10px] text-[var(--text-2)]"><span>{fmt(dynamicMs/1000,1)}s</span><input type="range" min="0" max={Math.max(1,stimDurMs)} step="50" value={dynamicMs} onChange={e=>{setDynamicPlaying(false);setDynamicMs(Number(e.target.value))}} className="flex-1 accent-[var(--accent)]" /><span>{fmt(stimDurMs/1000,1)}s</span></div>)}
+            </div>
           </div>
         </div>
 
@@ -4996,53 +5299,223 @@ function StimulusResults({result,colors}){
 function Kpi({label,value,sub,accent}){return(<div className="panel p-4 relative">{accent&&(<><div className="corner-tl"></div><div className="corner-tr"></div></>)}<div className="font-mono text-[10px] text-[var(--text-3)] uppercase tracking-widest mb-1">{label}</div><div className={`font-mono text-2xl ${accent?'text-[var(--accent)]':''}`}>{value}</div><div className="font-mono text-[10px] text-[var(--text-3)] mt-1">{sub}</div></div>)}
 function SmallStat({label,value}){return(<div className="panel p-3"><div className="font-mono text-[10px] text-[var(--text-3)] uppercase tracking-widest mb-1">{label}</div><div className="font-mono text-base">{value}</div></div>)}
 
+function FloatingHomeButton({onClick}){return <button type="button" className="home-floating" onClick={onClick} title="Về giao diện chính">⌂</button>}
+
+function AdminProjectBar({projects,currentProjectId,onSelectProject,onNewProject,onDeleteProject,projectInfo,onProjectNameChange,onSaveProject}){
+  return(
+    <div className="panel p-4 mb-6">
+      <div className="grid lg:grid-cols-12 gap-3 items-end">
+        <div className="lg:col-span-4">
+          <label className="font-mono text-[10px] text-[var(--text-2)] uppercase tracking-widest block mb-2">Chọn project để chỉnh sửa</label>
+          <select className="input-base" value={currentProjectId||''} onChange={e=>onSelectProject?.(e.target.value)} disabled={!projects.length}>
+            {projects.length===0&&<option value="">Chưa có project</option>}
+            {projects.map(p=><option key={p.id} value={p.id}>{p.name} · {p.stimulusCount} stim · {p.aoiCount} AOI</option>)}
+          </select>
+        </div>
+        <div className="lg:col-span-4">
+          <label className="font-mono text-[10px] text-[var(--text-2)] uppercase tracking-widest block mb-2">Tên project hiện tại</label>
+          <input className="input-base" value={projectInfo?.name||''} onChange={e=>onProjectNameChange?.(e.target.value)} placeholder="Tên project" />
+        </div>
+        <div className="lg:col-span-4 flex gap-2 flex-wrap">
+          <button onClick={onSaveProject} className="btn-ghost flex-1">Lưu project</button>
+          <button onClick={onNewProject} className="btn-primary flex-1">+ Project mới</button>
+          <button onClick={()=>currentProjectId&&onDeleteProject?.(currentProjectId)} disabled={!currentProjectId} className="btn-danger flex-1">Xoá project</button>
+        </div>
+      </div>
+      <div className="font-mono text-[10px] text-[var(--text-3)] mt-3">Khi chọn project ở đây, Admin sẽ tải đúng ảnh/video, AOI và tên ngành của project đó để chỉnh sửa.</div>
+    </div>
+  );
+}
+
+function AdminTestDataPanel({projectInfo}){
+  const [sessions,setSessions]=useState([]);
+  const [allCount,setAllCount]=useState(0);
+  const [projectCount,setProjectCount]=useState(0);
+  const [scope,setScope]=useState('project');
+  const [loading,setLoading]=useState(false);
+  const refresh=useCallback(async()=>{
+    setLoading(true);
+    try{
+      const current=projectInfo?.id?await loadTestSessions(projectInfo.id):[];
+      const all=await loadTestSessions(null);
+      setProjectCount(current.length);setAllCount(all.length);
+      setSessions(scope==='all'||!projectInfo?.id?all:current);
+    }finally{setLoading(false)}
+  },[projectInfo?.id,scope]);
+  useEffect(()=>{refresh()},[refresh]);
+  const remove=async(id,name)=>{
+    if(!confirm(`Xoá dữ liệu test của ${name||id}? Dữ liệu này sẽ không còn xuất hiện trong file Excel tổng.`))return;
+    await deleteTestSession(id);await refresh();
+  };
+  const exportCurrent=()=>{
+    if(!sessions.length){alert(scope==='all'?'Chưa có dữ liệu test nào.':'Project này chưa có dữ liệu test nào.');return}
+    exportSavedTestSessionsExcel(sessions,scope==='all'?'eyelab_all_projects_saved_tests':`eyelab_${slug(projectInfo?.name||'project')}_saved_tests`);
+  };
+  const exportAll=async()=>{
+    const all=await loadTestSessions(null);
+    if(!all.length){alert('Chưa có dữ liệu test nào.');return}
+    exportSavedTestSessionsExcel(all,'eyelab_all_projects_saved_tests');
+  };
+  return(
+    <div className="panel mt-6">
+      <div className="panel-header"><span>Thư mục dữ liệu test của user</span><span className="font-mono">Project này: {projectCount} · Tất cả: {allCount}</span></div>
+      <div className="p-4">
+        <div className="flex gap-2 flex-wrap mb-4">
+          <button onClick={refresh} className="btn-ghost">↻ Tải lại</button>
+          <button onClick={()=>setScope('project')} disabled={!projectInfo?.id} className={scope==='project'?'btn-primary':'btn-ghost'}>Project hiện tại</button>
+          <button onClick={()=>setScope('all')} className={scope==='all'?'btn-primary':'btn-ghost'}>Tất cả user</button>
+          <button onClick={exportCurrent} className="btn-primary">↓ Xuất Excel đang xem</button>
+          <button onClick={exportAll} className="btn-ghost">↓ Xuất Excel tất cả project</button>
+        </div>
+        <div className="font-mono text-[10px] text-[var(--text-3)] mb-3">Mỗi lần Participant hoàn thành test, dữ liệu sẽ tự lưu ở đây. Nếu không thấy ở “Project hiện tại”, bấm “Tất cả user” để xem toàn bộ dữ liệu đã lưu trong IndexedDB.</div>
+        {loading?(<div className="font-mono text-xs text-[var(--text-2)]">Đang tải dữ liệu…</div>):sessions.length===0?(<div className="p-6 text-center text-[var(--text-3)] text-sm font-mono border border-[var(--border)]">{scope==='all'?'Chưa có user test nào được lưu.':'Chưa có user test nào cho project hiện tại. Bấm “Tất cả user” nếu dữ liệu thuộc project khác.'}</div>):(
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="font-mono text-[10px] text-[var(--text-3)] uppercase tracking-widest"><tr className="border-b border-[var(--border)]"><th className="text-left p-2">User</th><th className="text-left p-2">Project</th><th className="text-left p-2">Session</th><th className="text-left p-2">Thời gian</th><th className="text-right p-2">Stim</th><th className="text-right p-2">Samples</th><th className="text-right p-2">Fixations</th><th className="text-right p-2">Action</th></tr></thead>
+              <tbody>{sessions.map(r=>(
+                <tr key={r.id} className="border-b border-[var(--border)] last:border-b-0">
+                  <td className="p-2"><div className="font-medium">{r.participantName||'—'}</div><div className="font-mono text-[10px] text-[var(--text-3)]">{r.participantId||'—'}</div></td>
+                  <td className="p-2"><div className="font-mono text-[11px] text-[var(--text-2)]">{r.projectName||'—'}</div><div className="font-mono text-[9px] text-[var(--text-3)]">{r.projectId||'—'}</div></td>
+                  <td className="p-2 font-mono text-[11px] text-[var(--text-2)]">{r.sessionId}</td>
+                  <td className="p-2 font-mono text-[11px] text-[var(--text-2)]">{r.createdAt?new Date(r.createdAt).toLocaleString():''}</td>
+                  <td className="p-2 text-right font-mono">{r.stimulusCount||0}</td>
+                  <td className="p-2 text-right font-mono">{r.totalSamples||0}</td>
+                  <td className="p-2 text-right font-mono">{r.totalFixations||0}</td>
+                  <td className="p-2 text-right"><button onClick={()=>remove(r.id,r.participantName||r.participantId)} className="btn-danger" style={{padding:'5px 9px',fontSize:10}}>Xoá user</button></td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 // ============================================================
 // APP
 // ============================================================
-function ModeSelect({onAdmin,onUser,hasProject}){
+function ModeSelect({onAdmin,onUser,hasProject,projects,currentProjectId,onSelectProject,onNewProject,onDeleteProject,storageReady}){
+  if(!storageReady){
+    return(<div className="min-h-screen bg-grid flex items-center justify-center px-6"><div className="panel p-8 text-center"><div className="font-display text-4xl mb-2">EyeLab<span className="text-[var(--accent)]">.</span></div><div className="font-mono text-xs text-[var(--text-2)]">Đang tải project từ IndexedDB…</div></div></div>);
+  }
   return(
     <div className="min-h-screen bg-grid flex items-center justify-center px-6">
-      <div className="max-w-5xl w-full">
-        <div className="text-center mb-10"><div className="font-display text-6xl mb-3">EyeLab<span className="text-[var(--accent)]">.</span></div><div className="font-mono text-[10px] text-[var(--text-3)] uppercase tracking-[0.3em]">GazeCloudAPI · Admin / Participant Mode</div></div>
+      <div className="max-w-6xl w-full">
+        <div className="text-center mb-10"><div className="font-display text-6xl mb-3">EyeLab<span className="text-[var(--accent)]">.</span></div><div className="font-mono text-[10px] text-[var(--text-3)] uppercase tracking-[0.3em]">GazeCloudAPI · Admin / Participant Mode · IndexedDB Storage</div></div>
+        <div className="panel mb-6">
+          <div className="panel-header"><span>Projects</span><span className="font-mono">IndexedDB · {projects.length} project(s)</span></div>
+          <div className="p-4 flex flex-wrap gap-2 items-center">
+            {projects.length===0&&<div className="font-mono text-xs text-[var(--text-3)]">Chưa có project nào. Bấm “Tạo project mới” để bắt đầu.</div>}
+            {projects.map(p=>(
+              <div key={p.id} className="flex items-center gap-1">
+                <button onClick={()=>onSelectProject(p.id)} className={p.id===currentProjectId?'btn-primary':'btn-ghost'}>
+                  Mở/sửa: {p.name} · {p.stimulusCount} stim · {p.aoiCount} AOI
+                </button>
+                <button onClick={()=>onDeleteProject?.(p.id)} className="btn-danger" style={{padding:'9px 10px',fontSize:11}}>Xoá</button>
+              </div>
+            ))}
+            <button onClick={onNewProject} className="btn-primary">+ Tạo project mới</button>
+          </div>
+        </div>
         <div className="grid md:grid-cols-2 gap-6">
-          <div className="panel p-8"><div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-[0.3em] mb-4">MODE 01</div><h2 className="font-display text-4xl mb-3">Admin mode</h2><p className="text-[var(--text-2)] text-sm leading-relaxed mb-6">Dùng cho nhóm nghiên cứu: thêm ảnh/video, sắp xếp stimulus, định nghĩa AOI, lưu project vào trình duyệt.</p><button onClick={onAdmin} className="btn-primary">Vào Admin mode</button></div>
-          <div className="panel p-8"><div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-[0.3em] mb-4">MODE 02</div><h2 className="font-display text-4xl mb-3">Participant mode</h2><p className="text-[var(--text-2)] text-sm leading-relaxed mb-6">Dùng cho người tham gia: nhập thông tin, calibration bằng GazeCloudAPI, xem stimulus và ghi dữ liệu. AOI sẽ bị ẩn trong quá trình test.</p>{!hasProject&&<div className="text-[var(--danger)] text-xs font-mono mb-4">Chưa có project. Hãy vào Admin mode để thêm stimulus và AOI trước.</div>}<button onClick={onUser} disabled={!hasProject} className="btn-primary">Vào Participant mode</button></div>
+          <div className="panel p-8"><div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-[0.3em] mb-4">MODE 01</div><h2 className="font-display text-4xl mb-3">Admin mode</h2><p className="text-[var(--text-2)] text-sm leading-relaxed mb-6">Dùng cho nhóm nghiên cứu: tạo project, thêm/xoá ảnh/video, nhập tên ngành, sắp xếp stimulus, định nghĩa AOI và lưu toàn bộ vào IndexedDB.</p><div className="flex gap-2 flex-wrap"><button onClick={onAdmin} className="btn-primary">Vào Admin mode</button><button onClick={onNewProject} className="btn-ghost">+ Project mới</button></div></div>
+          <div className="panel p-8"><div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-[0.3em] mb-4">MODE 02</div><h2 className="font-display text-4xl mb-3">Participant mode</h2><p className="text-[var(--text-2)] text-sm leading-relaxed mb-6">Dùng cho người tham gia: nhập thông tin, calibration bằng GazeCloudAPI, xem stimulus và ghi dữ liệu. AOI sẽ bị ẩn trong quá trình test.</p>{!hasProject&&<div className="text-[var(--danger)] text-xs font-mono mb-4">Project hiện tại chưa có stimulus. Hãy vào Admin mode để thêm stimulus và AOI trước.</div>}<button onClick={onUser} disabled={!hasProject} className="btn-primary">Vào Participant mode</button></div>
         </div>
       </div>
     </div>
   );
 }
 
-function AdminComplete({stimuli,onBack,onUser}){
+function AdminComplete({stimuli,projectInfo,onProjectNameChange,onBack,onEditStimuli,onUser,onCreateProject,onSaveProject,projects,onSelectProject,onDeleteProject,onHome}){
   const [savedAt,setSavedAt]=useState(null);
-  const save=()=>{const p=saveStoredProject(stimuli);setSavedAt(p.updatedAt)};
+  const save=async()=>{const p=await onSaveProject?.();setSavedAt(p?.updatedAt||new Date().toISOString());return p};
   useEffect(()=>{if(stimuli.length)save()},[]);
-  const exportConfig=()=>{const payload={version:1,engine:'GazeCloudAPI',updatedAt:new Date().toISOString(),stimuli:serializeStimuliForStorage(stimuli)};const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='eyelab_project_config.json';a.click();URL.revokeObjectURL(url);};
+  const exportConfig=()=>{const payload={...createProjectPayload(stimuli,projectInfo),exportedAt:new Date().toISOString()};const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});downloadBlob(blob,`eyelab_project_${slug(payload.name)}.json`)};
   return(
-    <Shell phase="aoi"><div><div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-[0.3em] mb-4">ADMIN / PROJECT READY</div><h2 className="font-display text-4xl mb-2">Project đã sẵn sàng</h2><p className="text-[var(--text-2)] mb-6">Bạn đã thêm {stimuli.length} stimulus và định nghĩa AOI. Project đã được lưu trong trình duyệt để Participant mode sử dụng.</p><div className="grid md:grid-cols-4 gap-3 mb-6"><Kpi label="Stimuli" value={stimuli.length} sub="files" accent /><Kpi label="Total AOI" value={stimuli.reduce((s,x)=>s+(x.aois?.length||0),0)} sub="defined" /><Kpi label="Engine" value="GazeCloud" sub="API" /><Kpi label="Saved" value={savedAt?'YES':'AUTO'} sub="localStorage" /></div><div className="panel mb-6"><div className="panel-header"><span>Stimulus list</span><span>/ ADMIN</span></div><div>{stimuli.map(s=><div key={s.id} className="stim-row"><div className="font-mono text-[10px] w-8">#{s.order}</div>{s.type==='image'?<img src={s.url} className="stim-thumb"/>:<video src={s.url} className="stim-thumb" muted/>}<div className="flex-1"><div>{s.name}</div><div className="font-mono text-[10px] text-[var(--text-3)]">{s.aois.length} AOI · {s.type}</div></div></div>)}</div></div><div className="flex gap-3 flex-wrap"><button onClick={save} className="btn-primary">Lưu project</button><button onClick={exportConfig} className="btn-ghost">Xuất config JSON</button><button onClick={onBack} className="btn-ghost">Quay lại sửa AOI</button><button onClick={onUser} className="btn-primary">Chuyển sang Participant mode</button></div></div></Shell>
+    <Shell phase="aoi">
+      <FloatingHomeButton onClick={onHome} />
+      <div>
+        <AdminProjectBar projects={projects||[]} currentProjectId={projectInfo?.id} onSelectProject={onSelectProject} onNewProject={onCreateProject} onDeleteProject={onDeleteProject} projectInfo={projectInfo} onProjectNameChange={onProjectNameChange} onSaveProject={onSaveProject} />
+        <div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-[0.3em] mb-4">ADMIN / PROJECT READY</div>
+        <h2 className="font-display text-4xl mb-2">Project đã sẵn sàng</h2>
+        <p className="text-[var(--text-2)] mb-6">Project được lưu trong <span className="font-mono text-[var(--accent)]">IndexedDB</span>, nên có thể chứa ảnh/video lớn hơn localStorage và Participant mode sẽ dùng đúng project hiện tại.</p>
+        <div className="panel p-4 mb-6">
+          <div className="grid md:grid-cols-3 gap-3 items-end">
+            <div className="md:col-span-2"><label className="font-mono text-[10px] text-[var(--text-2)] uppercase tracking-widest block mb-2">Tên project</label><input className="input-base" value={projectInfo?.name||''} onChange={e=>onProjectNameChange?.(e.target.value)} /></div>
+            <div className="flex gap-2"><button onClick={save} className="btn-primary flex-1">Lưu project</button><button onClick={onCreateProject} className="btn-ghost flex-1">+ Project mới</button></div>
+          </div>
+        </div>
+        <div className="grid md:grid-cols-4 gap-3 mb-6"><Kpi label="Stimuli" value={stimuli.length} sub="files" accent /><Kpi label="Total AOI" value={stimuli.reduce((s,x)=>s+(x.aois?.length||0),0)} sub="defined" /><Kpi label="Engine" value="GazeCloud" sub="API" /><Kpi label="Saved" value={savedAt?'YES':'AUTO'} sub="IndexedDB" /></div>
+        <div className="panel mb-6"><div className="panel-header"><span>Stimulus list</span><span>/ ADMIN</span></div><div>{stimuli.map(s=><div key={s.id} className="stim-row"><div className="font-mono text-[10px] w-8">#{s.order}</div>{s.type==='image'?<img src={s.url} className="stim-thumb"/>:<video src={s.url} className="stim-thumb" muted/>}<div className="flex-1"><div>{s.name}</div><div className="font-mono text-[10px] text-[var(--text-3)]">Ngành: {s.industry||'—'} · {s.aois.length} AOI · {s.type}</div></div></div>)}</div></div>
+        <div className="flex gap-3 flex-wrap"><button onClick={save} className="btn-primary">Lưu project</button><button onClick={exportConfig} className="btn-ghost">Xuất config JSON</button><button onClick={onEditStimuli} className="btn-ghost">Sửa / xoá stimulus</button><button onClick={onBack} className="btn-ghost">Quay lại sửa AOI</button><button onClick={onUser} className="btn-primary">Chuyển sang Participant mode</button></div>
+        <AdminTestDataPanel projectInfo={projectInfo} />
+      </div>
+    </Shell>
   );
 }
 
 function App(){
-  const stored=loadStoredProject();
+  const [storageReady,setStorageReady]=useState(false);
   const [mode,setMode]=useState(null);
   const [phase,setPhase]=useState('upload');
   const [demographics,setDemographics]=useState({participantId:'P001',name:'',age:'',gender:'',education:'',email:'',consent:false});
-  const [stimuli,setStimuli]=useState(()=>stored?.stimuli?hydrateStoredStimuli(stored.stimuli):[]);
+  const [stimuli,setStimuli]=useState([]);
+  const [projectInfo,setProjectInfo]=useState({id:null,name:DEFAULT_PROJECT_NAME,createdAt:null});
+  const [projects,setProjects]=useState([]);
   const [gazeReady,setGazeReady]=useState(false);
-  const [sessionId]=useState(generateSessionId());
+  const [sessionId,setSessionId]=useState(generateSessionId());
+
+  const refreshProjects=useCallback(async()=>{const list=await loadProjectList();setProjects(list);return list},[]);
+  const loadProject=useCallback(async(projectId=null)=>{
+    const p=await loadStoredProject(projectId);
+    if(p){setProjectInfo({id:p.id,name:p.name||DEFAULT_PROJECT_NAME,createdAt:p.createdAt});setStimuli(hydrateStoredStimuli(p.stimuli));}
+    else{setProjectInfo({id:null,name:DEFAULT_PROJECT_NAME,createdAt:null});setStimuli([])}
+    await refreshProjects();return p;
+  },[refreshProjects]);
+
+  useEffect(()=>{(async()=>{await loadProject();setStorageReady(true)})().catch(e=>{console.error(e);setStorageReady(true)})},[loadProject]);
+
   const updateStimulus=useCallback((id,patch)=>{setStimuli(prev=>prev.map(s=>s.id===id?{...s,...patch}:s));},[]);
-  const enterAdmin=()=>{setMode('admin');setPhase(stimuli.length?'aoi':'upload')};
-  const enterUser=()=>{const p=loadStoredProject();if(p?.stimuli?.length){setStimuli(hydrateStoredStimuli(p.stimuli));}setMode('user');setPhase('welcome')};
+  const saveCurrentProject=useCallback(async()=>{
+    const p=await saveStoredProject(stimuli,projectInfo);
+    setProjectInfo({id:p.id,name:p.name||DEFAULT_PROJECT_NAME,createdAt:p.createdAt});
+    await refreshProjects();return p;
+  },[stimuli,projectInfo,refreshProjects]);
+  const createNewProject=useCallback(async()=>{
+    const p=await createStoredProject(`Project ${projects.length+1}`);
+    setProjectInfo({id:p.id,name:p.name,createdAt:p.createdAt});setStimuli([]);await refreshProjects();setMode('admin');setPhase('upload');
+  },[projects.length,refreshProjects]);
+  const selectProject=useCallback(async(id)=>{await loadProject(id);setMode('admin');setPhase('upload')},[loadProject]);
+  const deleteProjectFlow=useCallback(async(id)=>{
+    const target=projects.find(p=>p.id===id);
+    if(!id)return;
+    if(!confirm(`Xoá project "${target?.name||id}"? Ảnh/video, AOI và dữ liệu test đã lưu của project này cũng sẽ bị xoá khỏi IndexedDB.`))return;
+    try{
+      const list=await deleteStoredProject(id);
+      setProjects(list);
+      if(list.length){await loadProject(list[0].id);setMode('admin');setPhase('upload')}
+      else{setProjectInfo({id:null,name:DEFAULT_PROJECT_NAME,createdAt:null});setStimuli([]);setMode(null);setPhase('upload')}
+    }catch(e){
+      console.error(e);
+      alert('Không xoá được project: '+(e?.message||String(e)));
+      await refreshProjects();
+    }
+  },[projects,refreshProjects,loadProject]);
+  const enterAdmin=async()=>{await refreshProjects();setMode('admin');setPhase(stimuli.length?'aoi':'upload')};
+  const enterUser=async()=>{setSessionId(generateSessionId());const p=projectInfo.id?await loadStoredProject(projectInfo.id):await loadStoredProject();if(p){setProjectInfo({id:p.id,name:p.name||DEFAULT_PROJECT_NAME,createdAt:p.createdAt});if(p.stimuli?.length)setStimuli(hydrateStoredStimuli(p.stimuli));}setMode('user');setPhase('welcome')};
   const backToMode=()=>{setMode(null);setPhase('upload')};
-  const restartUser=()=>{try{window.GazeCloudAPI?.StopEyeTracking?.()}catch(e){};const p=loadStoredProject();if(p?.stimuli?.length)setStimuli(hydrateStoredStimuli(p.stimuli));setGazeReady(false);setPhase('welcome')};
-  if(!mode){return <ModeSelect onAdmin={enterAdmin} onUser={enterUser} hasProject={!!(stored?.stimuli?.length||stimuli.length)} />}
+  const restartUser=async()=>{try{window.GazeCloudAPI?.StopEyeTracking?.()}catch(e){};setSessionId(generateSessionId());const p=projectInfo.id?await loadStoredProject(projectInfo.id):await loadStoredProject();if(p?.stimuli?.length)setStimuli(hydrateStoredStimuli(p.stimuli));setGazeReady(false);setPhase('welcome')};
+  const setProjectName=(name)=>setProjectInfo(p=>({...p,name}));
+  const hasProject=stimuli.length>0;
+
+  if(!mode){return <ModeSelect onAdmin={enterAdmin} onUser={enterUser} hasProject={hasProject} projects={projects} currentProjectId={projectInfo.id} onSelectProject={selectProject} onNewProject={createNewProject} onDeleteProject={deleteProjectFlow} storageReady={storageReady} />}
   if(mode==='admin'){
-    if(phase==='upload')return <Shell phase="upload"><UploadPhase onNext={()=>setPhase('aoi')} stimuli={stimuli} setStimuli={setStimuli} /></Shell>;
-    if(phase==='aoi')return <Shell phase="aoi"><AoiPhase onNext={()=>{saveStoredProject(stimuli);setPhase('admin_done')}} stimuli={stimuli} updateStimulus={updateStimulus} /></Shell>;
-    return <AdminComplete stimuli={stimuli} onBack={()=>setPhase('aoi')} onUser={enterUser} />;
+    const adminBar=<AdminProjectBar projects={projects} currentProjectId={projectInfo.id} onSelectProject={selectProject} onNewProject={createNewProject} onDeleteProject={deleteProjectFlow} projectInfo={projectInfo} onProjectNameChange={setProjectName} onSaveProject={saveCurrentProject} />;
+    if(phase==='upload')return <Shell phase="upload"><FloatingHomeButton onClick={backToMode} />{adminBar}<UploadPhase onNext={async()=>{await saveCurrentProject();setPhase('aoi')}} stimuli={stimuli} setStimuli={setStimuli} projectInfo={projectInfo} onProjectNameChange={setProjectName} onCreateProject={createNewProject} onSaveProject={saveCurrentProject} /><AdminTestDataPanel projectInfo={projectInfo} /></Shell>;
+    if(phase==='aoi')return <Shell phase="aoi"><FloatingHomeButton onClick={backToMode} />{adminBar}<AoiPhase onNext={async()=>{await saveCurrentProject();setPhase('admin_done')}} stimuli={stimuli} updateStimulus={updateStimulus} onEditStimuli={()=>setPhase('upload')} onCreateProject={createNewProject} onSaveProject={saveCurrentProject} projectInfo={projectInfo} onProjectNameChange={setProjectName} /><AdminTestDataPanel projectInfo={projectInfo} /></Shell>;
+    return <AdminComplete stimuli={stimuli} projectInfo={projectInfo} onProjectNameChange={setProjectName} onBack={()=>setPhase('aoi')} onEditStimuli={()=>setPhase('upload')} onUser={enterUser} onCreateProject={createNewProject} onSaveProject={saveCurrentProject} projects={projects} onSelectProject={selectProject} onDeleteProject={deleteProjectFlow} onHome={backToMode} />;
   }
-  return(<Shell phase={phase}><div className="mb-4 flex justify-end"><button onClick={backToMode} className="btn-ghost">← Chọn lại mode</button></div>{phase==='welcome'&&<WelcomePhase onNext={()=>setPhase('calibration')} demographics={demographics} setDemographics={setDemographics} />}{phase==='calibration'&&<CalibrationPhase onNext={()=>setPhase('recording')} gazeReady={gazeReady} setGazeReady={setGazeReady} />}{phase==='recording'&&<RecordingPhase onNext={()=>setPhase('results')} stimuli={stimuli} updateStimulus={updateStimulus} />}{phase==='results'&&<ResultsPhase sessionId={sessionId} demographics={demographics} stimuli={stimuli} onRestart={restartUser} />}</Shell>);
+  return(<Shell phase={phase}><FloatingHomeButton onClick={backToMode} /><div className="mb-4 flex justify-end"><button onClick={backToMode} className="btn-ghost">← Chọn lại mode</button></div>{phase==='welcome'&&<WelcomePhase onNext={()=>setPhase('calibration')} demographics={demographics} setDemographics={setDemographics} />}{phase==='calibration'&&<CalibrationPhase onNext={()=>setPhase('recording')} gazeReady={gazeReady} setGazeReady={setGazeReady} />}{phase==='recording'&&<RecordingPhase onNext={()=>setPhase('results')} stimuli={stimuli} updateStimulus={updateStimulus} />}{phase==='results'&&<ResultsPhase sessionId={sessionId} demographics={demographics} stimuli={stimuli} onRestart={restartUser} projectInfo={projectInfo} />}</Shell>);
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
