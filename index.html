@@ -3466,6 +3466,12 @@ input[type=file]{display:none}
 .rec-fs-fixation{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);font-family:'Instrument Serif',serif;font-size:80px;color:var(--accent);z-index:9001}
 .home-floating{position:fixed;left:14px;top:14px;z-index:12000;width:42px;height:42px;border-radius:999px;border:1px solid var(--border-2);background:rgba(12,12,14,0.86);color:var(--text-2);font-family:'JetBrains Mono',monospace;font-size:18px;display:flex;align-items:center;justify-content:center;box-shadow:0 8px 28px rgba(0,0,0,0.35);backdrop-filter:blur(10px);cursor:pointer;transition:all .15s}
 .home-floating:hover{color:var(--accent);border-color:var(--accent);background:rgba(245,158,11,0.08)}
+/* Hide the floating Home button while the participant is in CalibrationPhase */
+body.eyelab-calibrating .home-floating{
+  display:none !important;
+  visibility:hidden !important;
+  pointer-events:none !important;
+}
 </style>
 </head>
 <body>
@@ -4135,7 +4141,7 @@ function WelcomePhase({onNext,demographics,setDemographics}){
       <div className="col-span-12 lg:col-span-7">
         <div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-[0.3em] mb-4">PHASE 01 / PARTICIPANT INFO</div>
         <h1 className="font-display text-5xl leading-[1.05] mb-4">Thông tin <span className="italic text-[var(--accent)]">người tham gia</span></h1>
-        <p className="text-[var(--text-2)] leading-relaxed max-w-xl mb-6">Vui lòng điền đầy đủ thông tin. Dữ liệu này được lưu cùng kết quả eye-tracking và xuất ra file CSV/Excel cho SPSS, R, etc.</p>
+        <p className="text-[var(--text-2)] leading-relaxed max-w-xl mb-6">Vui lòng điền đầy đủ thông tin.</p>
         {isFile&&(<div className="panel p-4 mb-6" style={{borderColor:'var(--danger)',background:'rgba(239,68,68,0.05)'}}><div className="text-sm mb-1">⚠ Đang chạy từ file:// — eye-tracking sẽ không hoạt động</div><div className="text-xs text-[var(--text-2)] font-mono">Cần HTTP server: <span className="text-[var(--accent)]">python -m http.server 8000</span></div></div>)}
         <div className="panel p-6 space-y-5">
           <div><label className="font-mono text-[10px] text-[var(--text-2)] uppercase tracking-widest block mb-2">Mã người tham gia</label><input className="input-base" value={demographics.participantId} onChange={e=>update('participantId',e.target.value)} /></div>
@@ -4158,7 +4164,7 @@ function WelcomePhase({onNext,demographics,setDemographics}){
           </div>
         </div>
         <div className="mt-6 flex items-center gap-3 flex-wrap">
-          {!cameraReady?(<button onClick={requestCamera} disabled={requesting} className="btn-primary">{requesting?'Đang yêu cầu…':'→ Cấp quyền Webcam'}</button>):(<button onClick={onNext} disabled={!isValid} className="btn-primary">→ Tiếp tục đến Upload</button>)}
+          {!cameraReady?(<button onClick={requestCamera} disabled={requesting} className="btn-primary">{requesting?'Đang yêu cầu…':'→ Cấp quyền Webcam'}</button>):(<button onClick={onNext} disabled={!isValid} className="btn-primary">→ Tiếp tục</button>)}
           {cameraReady&&<span className="font-mono text-xs text-[var(--success)]">✓ Webcam sẵn sàng</span>}
           {!isValid&&cameraReady&&<span className="font-mono text-xs text-[var(--text-3)]">Điền đầy đủ các trường có dấu *</span>}
         </div>
@@ -4328,6 +4334,154 @@ function CalibrationPhase({onNext,gazeReady,setGazeReady}){
   const [error,setError]=useState(null);
   const [calibrated,setCalibrated]=useState(false);
   const [started,setStarted]=useState(false);
+  const [validationActive,setValidationActive]=useState(false);
+  const [validationPointIndex,setValidationPointIndex]=useState(-1);
+  const [validationMessage,setValidationMessage]=useState('');
+  const [validationResult,setValidationResult]=useState(null);
+  const [validationSkipped,setValidationSkipped]=useState(false);
+  const validationSamplesRef=useRef([]);
+  const validationPointRef=useRef(-1);
+  const validationPointStartRef=useRef(0);
+  const validationCollectingRef=useRef(false);
+  const validationStartRef=useRef(0);
+
+  const VALIDATION_POINTS=[
+    {index:1,x:0.1,y:0.1,label:'1'}, {index:2,x:0.5,y:0.1,label:'2'}, {index:3,x:0.9,y:0.1,label:'3'},
+    {index:4,x:0.1,y:0.5,label:'4'}, {index:5,x:0.5,y:0.5,label:'5'}, {index:6,x:0.9,y:0.5,label:'6'},
+    {index:7,x:0.1,y:0.9,label:'7'}, {index:8,x:0.5,y:0.9,label:'8'}, {index:9,x:0.9,y:0.9,label:'9'},
+  ];
+  // Validation algorithm v2
+  // Each target is visible a little longer, but only the stable window is used for accuracy.
+  // Warm-up samples are exported for audit but excluded from Mean/Median Error.
+  const VALIDATION_POINT_MS=2200;
+  const VALIDATION_SETTLE_MS=900;
+  const VALIDATION_END_GUARD_MS=150;
+  const VALIDATION_MIN_VALID_PER_POINT=5;
+  const VALIDATION_MAD_FACTOR=3;
+
+  useEffect(()=>{
+    document.body.classList.add('eyelab-calibrating');
+    return ()=>document.body.classList.remove('eyelab-calibrating');
+  },[]);
+
+  const classifyValidation=useCallback((medianErrorPx,validPct,usablePointCount)=>{
+    if(!Number.isFinite(medianErrorPx)||validPct<35||usablePointCount<5)return{label:'POOR',color:'var(--danger)',note:'Dữ liệu validation yếu — nên calibration lại hoặc cải thiện ánh sáng/vị trí ngồi.'};
+    if(medianErrorPx<=70&&validPct>=70&&usablePointCount>=8)return{label:'GOOD',color:'var(--success)',note:'Đủ tốt cho phân tích AOI lớn trong quảng cáo. Thuật toán đã bỏ warm-up và dùng median gaze ổn định.'};
+    if(medianErrorPx<=130&&validPct>=50&&usablePointCount>=6)return{label:'FAIR',color:'var(--accent)',note:'Có thể dùng cho AOI lớn, nhưng không nên dùng cho AOI nhỏ hoặc chữ quá nhỏ.'};
+    return{label:'POOR',color:'var(--danger)',note:'Nên calibration lại trước khi chạy bài test chính.'};
+  },[]);
+
+  const meanOf=arr=>arr.length?arr.reduce((a,b)=>a+b,0)/arr.length:null;
+  const percentile=(arr,p)=>{
+    const vals=arr.filter(Number.isFinite).sort((a,b)=>a-b);
+    if(!vals.length)return null;
+    const pos=(vals.length-1)*p;
+    const base=Math.floor(pos),rest=pos-base;
+    return vals[base+1]!==undefined?vals[base]+rest*(vals[base+1]-vals[base]):vals[base];
+  };
+  const madValue=(arr)=>{
+    const vals=arr.filter(Number.isFinite);
+    if(!vals.length)return 0;
+    const med=median(vals);
+    return median(vals.map(v=>Math.abs(v-med)));
+  };
+  const robustFilterSamples=(samples)=>{
+    const vals=samples.filter(s=>Number.isFinite(s.errorPx));
+    if(vals.length<VALIDATION_MIN_VALID_PER_POINT)return vals;
+    const es=vals.map(s=>s.errorPx);
+    const med=median(es);
+    const mad=madValue(es);
+    const minBand=45;
+    const limit=mad>0?med+VALIDATION_MAD_FACTOR*1.4826*mad:med+minBand;
+    const threshold=Math.max(med+minBand,limit);
+    return vals.filter(s=>s.errorPx<=threshold);
+  };
+
+  const computeValidationResult=useCallback((samples,startMs,endMs)=>{
+    const durationMs=Math.max(1,endMs-startMs);
+    const analysisSamples=samples.filter(s=>s.phase==='analysis');
+    const validAnalysisSamples=analysisSamples.filter(s=>s.valid&&Number.isFinite(s.errorPx));
+    const sampleErrors=validAnalysisSamples.map(s=>s.errorPx);
+    const pointMetrics=VALIDATION_POINTS.map(p=>{
+      const all=samples.filter(s=>s.pointIndex===p.index);
+      const analysis=all.filter(s=>s.phase==='analysis');
+      const vals=analysis.filter(s=>s.valid&&Number.isFinite(s.errorPx));
+      const robust=robustFilterSamples(vals);
+      const es=vals.map(s=>s.errorPx);
+      const robustEs=robust.map(s=>s.errorPx);
+      const targetXPx=p.x*window.innerWidth;
+      const targetYPx=p.y*window.innerHeight;
+      const medianGazeXPx=robust.length?median(robust.map(s=>s.gazeXPx)):null;
+      const medianGazeYPx=robust.length?median(robust.map(s=>s.gazeYPx)):null;
+      const pointErrorPx=(Number.isFinite(medianGazeXPx)&&Number.isFinite(medianGazeYPx))?Math.hypot(medianGazeXPx-targetXPx,medianGazeYPx-targetYPx):null;
+      const precisionPx=robust.length&&Number.isFinite(medianGazeXPx)&&Number.isFinite(medianGazeYPx)?median(robust.map(s=>Math.hypot(s.gazeXPx-medianGazeXPx,s.gazeYPx-medianGazeYPx))):null;
+      return{
+        point:p.index,targetXNorm:p.x,targetYNorm:p.y,targetXPx:Math.round(targetXPx),targetYPx:Math.round(targetYPx),
+        totalSamples:all.length,analysisSamples:analysis.length,validSamples:vals.length,usedSamples:robust.length,
+        validPct:analysis.length?vals.length/analysis.length*100:0,usedPct:analysis.length?robust.length/analysis.length*100:0,
+        meanErrorPx:meanOf(es),medianErrorPx:es.length?median(es):null,maxErrorPx:es.length?Math.max(...es):null,
+        robustMeanErrorPx:meanOf(robustEs),robustMedianErrorPx:robustEs.length?median(robustEs):null,
+        pointErrorPx,precisionPx,
+        medianGazeXPx,medianGazeYPx,
+        biasXPx:Number.isFinite(medianGazeXPx)?medianGazeXPx-targetXPx:null,
+        biasYPx:Number.isFinite(medianGazeYPx)?medianGazeYPx-targetYPx:null,
+      };
+    });
+    const pointErrors=pointMetrics.map(p=>p.pointErrorPx).filter(Number.isFinite);
+    const precisionVals=pointMetrics.map(p=>p.precisionPx).filter(Number.isFinite);
+    const meanErrorPx=meanOf(pointErrors);
+    const medianErrorPx=pointErrors.length?median(pointErrors):null;
+    const maxErrorPx=pointErrors.length?Math.max(...pointErrors):null;
+    const sampleMeanErrorPx=meanOf(sampleErrors);
+    const sampleMedianErrorPx=sampleErrors.length?median(sampleErrors):null;
+    const sampleP75ErrorPx=percentile(sampleErrors,0.75);
+    const validPct=analysisSamples.length?validAnalysisSamples.length/analysisSamples.length*100:0;
+    const sampleRateHz=samples.length/(durationMs/1000);
+    const usablePointCount=pointErrors.length;
+    const quality=classifyValidation(medianErrorPx,validPct,usablePointCount);
+    const avgPrecisionPx=meanOf(precisionVals);
+    return{
+      id:'VAL-'+new Date().toISOString().replace(/[:.]/g,'-'),
+      createdAt:new Date().toISOString(),algorithmVersion:'v2-stable-window-median',
+      screenWidth:window.innerWidth,screenHeight:window.innerHeight,devicePixelRatio:window.devicePixelRatio,
+      pointDurationMs:VALIDATION_POINT_MS,settleDiscardMs:VALIDATION_SETTLE_MS,endGuardDiscardMs:VALIDATION_END_GUARD_MS,
+      totalSamples:samples.length,analysisSamples:analysisSamples.length,validSamples:validAnalysisSamples.length,validPct,trackingLossPct:100-validPct,
+      durationMs,sampleRateHz,usablePointCount,
+      meanErrorPx,medianErrorPx,maxErrorPx,avgPrecisionPx,
+      sampleMeanErrorPx,sampleMedianErrorPx,sampleP75ErrorPx,
+      quality,pointMetrics,samples,
+    };
+  },[classifyValidation]);
+
+  const recordValidationSample=useCallback((data)=>{
+    if(!validationCollectingRef.current)return;
+    const idx=validationPointRef.current;
+    if(idx<1)return;
+    const p=VALIDATION_POINTS[idx-1];
+    const now=performance.now();
+    const elapsed=now-validationPointStartRef.current;
+    const rawX=Number(data?.docX??data?.GazeX??data?.x);
+    const rawY=Number(data?.docY??data?.GazeY??data?.y);
+    const xPx=rawX-window.scrollX;
+    const yPx=rawY-window.scrollY;
+    const state=data?.state;
+    const coordOk=Number.isFinite(xPx)&&Number.isFinite(yPx);
+    const trackingOk=state!==-1&&state!==undefined;
+    const phase=elapsed<VALIDATION_SETTLE_MS?'warmup':(elapsed>VALIDATION_POINT_MS-VALIDATION_END_GUARD_MS?'end_guard':'analysis');
+    const valid=coordOk&&trackingOk;
+    const targetXPx=p.x*window.innerWidth;
+    const targetYPx=p.y*window.innerHeight;
+    const xNorm=coordOk?xPx/window.innerWidth:null;
+    const yNorm=coordOk?yPx/window.innerHeight:null;
+    const errorPx=valid?Math.hypot(xPx-targetXPx,yPx-targetYPx):null;
+    const errorNorm=valid?Math.hypot(xNorm-p.x,yNorm-p.y):null;
+    validationSamplesRef.current.push({
+      pointIndex:p.index,pointLabel:p.label,targetXNorm:p.x,targetYNorm:p.y,targetXPx,targetYPx,
+      elapsedMs:now-validationStartRef.current,pointElapsedMs:elapsed,phase,usedForAnalysis:valid&&phase==='analysis',
+      gazeXPx:coordOk?xPx:null,gazeYPx:coordOk?yPx:null,gazeXNorm:xNorm,gazeYNorm:yNorm,
+      errorPx,errorNorm,valid,state:state??'',
+    });
+  },[]);
 
   const configureCallbacks=useCallback(()=>{
     if(!window.GazeCloudAPI)return false;
@@ -4347,7 +4501,7 @@ function CalibrationPhase({onNext,gazeReady,setGazeReady}){
   },[setGazeReady]);
 
   const startGazeCloud=useCallback(()=>{
-    setError(null);
+    setError(null);setValidationSkipped(false);setValidationResult(null);
     if(!window.GazeCloudAPI){setError('Không tải được GazeCloudAPI.js');return}
     if(!configureCallbacks())return;
     setStarted(true);setStatus('starting');
@@ -4360,17 +4514,109 @@ function CalibrationPhase({onNext,gazeReady,setGazeReady}){
 
   const showNativeCalibration=useCallback(()=>{
     if(!window.GazeCloudAPI){setError('Không tải được GazeCloudAPI.js');return}
+    setValidationSkipped(false);setValidationResult(null);
     configureCallbacks();
     try{GazeCloudAPI.ShowCalibration();setStatus('calibrating')}catch(e){setError(String(e))}
   },[configureCallbacks]);
 
   const stop=useCallback(()=>{try{window.GazeCloudAPI?.StopEyeTracking?.()}catch(e){};setStatus('stopped')},[]);
 
+  const startValidation=useCallback(async()=>{
+    if(!window.GazeCloudAPI){setError('Không tải được GazeCloudAPI.js');return}
+    if(!calibrated&&!gazeReady){setError('Cần hoàn tất calibration trước khi chạy validation.');return}
+    setError(null);setValidationSkipped(false);setValidationResult(null);
+    validationSamplesRef.current=[];
+    validationPointRef.current=-1;
+    validationCollectingRef.current=false;
+    validationStartRef.current=performance.now();
+    setValidationActive(true);
+    setValidationPointIndex(-1);
+    setValidationMessage('Chuẩn bị validation — hãy nhìn vào từng chấm đỏ khi nó xuất hiện.');
+    try{if(document.documentElement.requestFullscreen)await document.documentElement.requestFullscreen()}catch(e){}
+    try{GazeCloudAPI.OnResult=recordValidationSample}catch(e){}
+    await sleep(1200);
+    for(const p of VALIDATION_POINTS){
+      validationPointRef.current=p.index;
+      validationPointStartRef.current=performance.now();
+      validationCollectingRef.current=true;
+      setValidationPointIndex(p.index-1);
+      setValidationMessage(`Point ${p.index}/9 · nhìn vào chấm đỏ`);
+      await sleep(VALIDATION_POINT_MS);
+      validationCollectingRef.current=false;
+    }
+    const end=performance.now();
+    const result=computeValidationResult([...validationSamplesRef.current],validationStartRef.current,end);
+    setValidationPointIndex(-1);
+    setValidationMessage('Validation hoàn tất.');
+    setValidationActive(false);
+    setValidationResult(result);
+    try{window.EyeLabLastValidationResult=result;localStorage.setItem('eyelab_last_validation_result',JSON.stringify(result))}catch(e){}
+    try{GazeCloudAPI.OnResult=function(){}}catch(e){}
+    try{if(document.fullscreenElement)document.exitFullscreen()}catch(e){}
+  },[calibrated,gazeReady,recordValidationSample,computeValidationResult]);
+
+  const skipValidation=useCallback(()=>{
+    setValidationSkipped(true);
+    setValidationResult(null);
+    onNext();
+  },[onNext]);
+
+  const exportValidationCsv=useCallback(()=>{
+    const r=validationResult;if(!r)return;
+    const headers=['validation_id','created_at','algorithm_version','point','target_x_norm','target_y_norm','target_x_px','target_y_px','elapsed_ms','point_elapsed_ms','phase','used_for_analysis','gaze_x_px','gaze_y_px','gaze_x_norm','gaze_y_norm','error_px','error_norm','valid','state'];
+    const lines=[headers.join(',')];
+    const esc=v=>v==null?'':String(v).includes(',')?`"${String(v).replace(/"/g,'""')}"`:String(v);
+    r.samples.forEach(s=>lines.push([r.id,r.createdAt,r.algorithmVersion,s.pointIndex,s.targetXNorm,s.targetYNorm,Math.round(s.targetXPx),Math.round(s.targetYPx),Math.round(s.elapsedMs),Math.round(s.pointElapsedMs),s.phase,s.usedForAnalysis?1:0,s.gazeXPx==null?'':Math.round(s.gazeXPx),s.gazeYPx==null?'':Math.round(s.gazeYPx),fmt(s.gazeXNorm,5),fmt(s.gazeYNorm,5),s.errorPx==null?'':fmt(s.errorPx,2),s.errorNorm==null?'':fmt(s.errorNorm,5),s.valid?1:0,s.state].map(esc).join(',')));
+    downloadBlob(new Blob(['\uFEFF'+lines.join('\n')],{type:'text/csv;charset=utf-8;'}),`eyelab_validation_${r.id}.csv`);
+  },[validationResult]);
+
+  const exportValidationExcel=useCallback(()=>{
+    const r=validationResult;if(!r)return;
+    const wb=XLSX.utils.book_new();
+    const summary=[
+      ['Validation ID',r.id],['Created At',r.createdAt],['Algorithm Version',r.algorithmVersion],['Screen Width',r.screenWidth],['Screen Height',r.screenHeight],['Device Pixel Ratio',r.devicePixelRatio],
+      ['Point Duration ms',r.pointDurationMs],['Warm-up Discard ms',r.settleDiscardMs],['End Guard Discard ms',r.endGuardDiscardMs],
+      ['Total Samples',r.totalSamples],['Analysis Samples',r.analysisSamples],['Valid Analysis Samples',r.validSamples],['Valid %',fmt(r.validPct,2)],['Tracking Loss %',fmt(r.trackingLossPct,2)],['Sample Rate Hz',fmt(r.sampleRateHz,2)],
+      ['Point Median Mean Error px',fmt(r.meanErrorPx,2)],['Point Median Median Error px',fmt(r.medianErrorPx,2)],['Point Median Max Error px',fmt(r.maxErrorPx,2)],['Avg Precision px',fmt(r.avgPrecisionPx,2)],['Sample Median Error px',fmt(r.sampleMedianErrorPx,2)],['Quality',r.quality.label],['Note',r.quality.note],
+    ];
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(summary),'Summary');
+    const pointHeaders=['point','target_x_norm','target_y_norm','target_x_px','target_y_px','total_samples','analysis_samples','valid_samples','used_samples','valid_pct','sample_mean_error_px','sample_median_error_px','point_error_px','precision_px','median_gaze_x_px','median_gaze_y_px','bias_x_px','bias_y_px','max_error_px'];
+    const pointRows=r.pointMetrics.map(p=>[p.point,p.targetXNorm,p.targetYNorm,p.targetXPx,p.targetYPx,p.totalSamples,p.analysisSamples,p.validSamples,p.usedSamples,fmt(p.validPct,2),fmt(p.meanErrorPx,2),fmt(p.medianErrorPx,2),fmt(p.pointErrorPx,2),fmt(p.precisionPx,2),fmt(p.medianGazeXPx,2),fmt(p.medianGazeYPx,2),fmt(p.biasXPx,2),fmt(p.biasYPx,2),fmt(p.maxErrorPx,2)]);
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([pointHeaders,...pointRows]),'Point Metrics');
+    const rawHeaders=['point','target_x_norm','target_y_norm','target_x_px','target_y_px','elapsed_ms','point_elapsed_ms','phase','used_for_analysis','gaze_x_px','gaze_y_px','gaze_x_norm','gaze_y_norm','error_px','error_norm','valid','state'];
+    const rawRows=r.samples.map(s=>[s.pointIndex,s.targetXNorm,s.targetYNorm,Math.round(s.targetXPx),Math.round(s.targetYPx),Math.round(s.elapsedMs),Math.round(s.pointElapsedMs),s.phase,s.usedForAnalysis?1:0,s.gazeXPx==null?'':Math.round(s.gazeXPx),s.gazeYPx==null?'':Math.round(s.gazeYPx),fmt(s.gazeXNorm,5),fmt(s.gazeYNorm,5),s.errorPx==null?'':fmt(s.errorPx,2),s.errorNorm==null?'':fmt(s.errorNorm,5),s.valid?1:0,s.state]);
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([rawHeaders,...rawRows]),'Raw Samples');
+    XLSX.writeFile(wb,`eyelab_validation_${r.id}.xlsx`);
+  },[validationResult]);
+
+  const activePoint=validationPointIndex>=0?VALIDATION_POINTS[validationPointIndex]:null;
+
   return(
     <div>
-      <div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-[0.3em] mb-4">PHASE 03 / GAZECLOUDAPI NATIVE CALIBRATION</div>
-      <h2 className="font-display text-4xl mb-2">Hiệu chuẩn bằng GazeCloudAPI</h2>
-      <p className="text-[var(--text-2)] mb-6 max-w-3xl">Bước này dùng trực tiếp calibration gốc của GazeRecorder/GazeCloudAPI. Người tham gia chỉ cần cấp quyền webcam và làm theo hướng dẫn trên màn hình.</p>
+      {validationActive&&(
+        <div className="fixed inset-0 bg-white text-black z-[25000] cursor-none overflow-hidden">
+          <div className="fixed top-6 left-6 font-mono text-xs text-black/60">EyeLab Validation · {validationMessage}</div>
+          <div className="fixed top-6 right-6 font-mono text-xs text-black/60">Mỗi điểm: 2.2s · chỉ tính cửa sổ ổn định sau 0.9s</div>
+          {activePoint?(
+            <div>
+              <div className="absolute rounded-full" style={{left:`calc(${activePoint.x*100}% - 22px)`,top:`calc(${activePoint.y*100}% - 22px)`,width:44,height:44,border:'3px solid rgba(239,68,68,.35)'}}></div>
+              <div className="absolute rounded-full" style={{left:`calc(${activePoint.x*100}% - 9px)`,top:`calc(${activePoint.y*100}% - 9px)`,width:18,height:18,background:'#ef4444',boxShadow:'0 0 0 12px rgba(239,68,68,.16), 0 0 30px rgba(239,68,68,.45)'}}></div>
+              <div className="absolute font-mono text-[11px] text-black/50" style={{left:`calc(${activePoint.x*100}% + 22px)`,top:`calc(${activePoint.y*100}% + 18px)`}}>P{activePoint.index} · ({activePoint.x}, {activePoint.y})</div>
+            </div>
+          ):(
+            <div className="h-full w-full flex items-center justify-center text-center">
+              <div>
+                <div className="font-display text-5xl mb-4">Validation</div>
+                <div className="font-mono text-sm text-black/60">Nhìn lần lượt vào 9 chấm đỏ. Giữ đầu cố định.</div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-[0.3em] mb-4">PHASE 03 / CALIBRATION + VALIDATION</div>
+      <h2 className="font-display text-4xl mb-2">Hiệu chuẩn & <span className="italic text-[var(--accent)]">Validation</span></h2>
+      <p className="text-[var(--text-2)] mb-6 max-w-3xl">Sau khi calibration xong, bạn có thể chạy thêm validation 9 điểm để kiểm tra sai số gaze. Nếu không cần kiểm tra, có thể skip validation và đi thẳng vào bài test.</p>
       <div className="grid grid-cols-12 gap-6">
         <div className="col-span-12 lg:col-span-7">
           <div className="panel p-6 space-y-5">
@@ -4381,12 +4627,38 @@ function CalibrationPhase({onNext,gazeReady,setGazeReady}){
               <button onClick={startGazeCloud} disabled={status==='starting'||status==='calibrating'} className="btn-primary">● Khởi động & Calibration</button>
               <button onClick={showNativeCalibration} disabled={!started} className="btn-ghost">↻ Mở lại calibration</button>
               <button onClick={stop} className="btn-danger">Dừng tracking</button>
+            </div>
+            {(calibrated||gazeReady)&&<div className="font-mono text-xs text-[var(--success)]">✓ Calibration hoàn tất. Bây giờ có thể chạy validation hoặc skip.</div>}
+          </div>
+
+          <div className="panel p-6 mt-6 space-y-5">
+            <div className="panel-header" style={{margin:'-24px -24px 20px -24px'}}><span>Validation Mode</span><span>9-point · stable-window</span></div>
+            <div className="grid grid-cols-3 gap-3">
+              <Stat label="Validation" value={validationResult?'DONE':validationSkipped?'SKIPPED':'NOT RUN'} mono color={validationResult?'var(--success)':validationSkipped?'var(--accent)':undefined} />
+              <Stat label="Median Error" value={validationResult?fmt(validationResult.medianErrorPx,1)+' px':'—'} mono color={validationResult?.quality?.color} />
+              <Stat label="Quality" value={validationResult?validationResult.quality.label:'—'} mono color={validationResult?.quality?.color} />
+            </div>
+            <div className="text-sm text-[var(--text-2)] leading-relaxed">Validation sẽ hiện 9 chấm đỏ tại tọa độ cố định: (0.1,0.1), (0.5,0.1), …, (0.9,0.9). Bản v2 bỏ warm-up đầu mỗi điểm, loại outlier bằng MAD và tính sai số chính bằng median gaze ổn định của từng điểm.</div>
+            {validationResult&&(
+              <div className="border border-[var(--border)] p-4 bg-[var(--bg)] space-y-3">
+                <div className="font-mono text-xs" style={{color:validationResult.quality.color}}>● {validationResult.quality.label}: {validationResult.quality.note}</div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <Stat label="Mean Error" value={fmt(validationResult.meanErrorPx,1)+' px'} mono />
+                  <Stat label="Valid Samples" value={fmt(validationResult.validPct,1)+'%'} mono />
+                  <Stat label="Sample Rate" value={fmt(validationResult.sampleRateHz,1)+' Hz'} mono />
+                  <Stat label="Analysis Samples" value={validationResult.analysisSamples} mono />
+                </div>
+                <div className="flex gap-2 flex-wrap"><button onClick={exportValidationExcel} className="btn-ghost">Tải Excel validation</button><button onClick={exportValidationCsv} className="btn-ghost">Tải CSV validation</button></div>
+              </div>
+            )}
+            <div className="flex gap-3 flex-wrap">
+              <button onClick={startValidation} disabled={!calibrated&&!gazeReady||validationActive} className="btn-primary">◎ Chạy validation 9 điểm</button>
+              <button onClick={skipValidation} disabled={!calibrated&&!gazeReady} className="btn-ghost">Skip validation & bắt đầu test</button>
               <button onClick={onNext} disabled={!calibrated&&!gazeReady} className="btn-primary">→ Bắt đầu test</button>
             </div>
-            {(calibrated||gazeReady)&&<div className="font-mono text-xs text-[var(--success)]">✓ Calibration hoàn tất. Có thể chuyển sang bước ghi dữ liệu.</div>}
           </div>
         </div>
-        <div className="col-span-12 lg:col-span-5"><div className="panel"><div className="panel-header"><span>Lưu ý khi dùng GazeCloudAPI</span><span>/ IMPORTANT</span></div><div className="p-5 text-sm text-[var(--text-2)] leading-relaxed space-y-3"><p>1. Nên chạy web bằng HTTP/HTTPS, không mở trực tiếp bằng file://.</p><p>2. Nếu dùng domain thật, cần kiểm tra API key/origin của GazeCloudAPI.</p><p>3. Sau calibration, web thu gaze qua <span className="font-mono text-[var(--accent)]">GazeData.docX/docY</span>.</p></div></div></div>
+        <div className="col-span-12 lg:col-span-5"><div className="panel"><div className="panel-header"><span>Lưu ý khi dùng GazeCloudAPI</span><span>/ IMPORTANT</span></div><div className="p-5 text-sm text-[var(--text-2)] leading-relaxed space-y-3"><p>1. Nên chạy web bằng HTTP/HTTPS, không mở trực tiếp bằng file://.</p><p>2. Validation phù hợp để chứng minh hệ thống đủ tin cậy cho phân tích AOI lớn, không phải để đo chính xác từng chữ nhỏ.</p><p>3. Sau calibration, web thu gaze qua <span className="font-mono text-[var(--accent)]">GazeData.docX/docY</span>; validation quy đổi về tọa độ viewport và so với điểm thật.</p></div></div></div>
       </div>
     </div>
   );
@@ -5401,7 +5673,7 @@ function ModeSelect({onAdmin,onUser,hasProject,projects,currentProjectId,onSelec
   return(
     <div className="min-h-screen bg-grid flex items-center justify-center px-6">
       <div className="max-w-6xl w-full">
-        <div className="text-center mb-10"><div className="font-display text-6xl mb-3">EyeLab<span className="text-[var(--accent)]">.</span></div><div className="font-mono text-[10px] text-[var(--text-3)] uppercase tracking-[0.3em]">GazeCloudAPI · Admin / Participant Mode · IndexedDB Storage</div></div>
+        <div className="text-center mb-10"><div className="font-display text-6xl mb-3">EyeLab<span className="text-[var(--accent)]">.</span></div><div className="font-mono text-[10px] text-[var(--text-3)] uppercase tracking-[0.3em]">GazeCloudAPI · IndexedDB Storage</div></div>
         <div className="panel mb-6">
           <div className="panel-header"><span>Projects</span><span className="font-mono">IndexedDB · {projects.length} project(s)</span></div>
           <div className="p-4 flex flex-wrap gap-2 items-center">
@@ -5414,12 +5686,12 @@ function ModeSelect({onAdmin,onUser,hasProject,projects,currentProjectId,onSelec
                 <button onClick={()=>onDeleteProject?.(p.id)} className="btn-danger" style={{padding:'9px 10px',fontSize:11}}>Xoá</button>
               </div>
             ))}
-            <button onClick={onNewProject} className="btn-primary">+ Tạo project mới</button>
+            <button onClick={onNewProject} className="btn-primary">Project mới</button>
           </div>
         </div>
         <div className="grid md:grid-cols-2 gap-6">
-          <div className="panel p-8"><div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-[0.3em] mb-4">MODE 01</div><h2 className="font-display text-4xl mb-3">Admin mode</h2><p className="text-[var(--text-2)] text-sm leading-relaxed mb-6">Dùng cho nhóm nghiên cứu: tạo project, thêm/xoá ảnh/video, nhập tên ngành, sắp xếp stimulus, định nghĩa AOI và lưu toàn bộ vào IndexedDB.</p><div className="flex gap-2 flex-wrap"><button onClick={onAdmin} className="btn-primary">Vào Admin mode</button><button onClick={onNewProject} className="btn-ghost">+ Project mới</button></div></div>
-          <div className="panel p-8"><div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-[0.3em] mb-4">MODE 02</div><h2 className="font-display text-4xl mb-3">Participant mode</h2><p className="text-[var(--text-2)] text-sm leading-relaxed mb-6">Dùng cho người tham gia: nhập thông tin, calibration bằng GazeCloudAPI, xem stimulus và ghi dữ liệu. AOI sẽ bị ẩn trong quá trình test.</p>{!hasProject&&<div className="text-[var(--danger)] text-xs font-mono mb-4">Project hiện tại chưa có stimulus. Hãy vào Admin mode để thêm stimulus và AOI trước.</div>}<button onClick={onUser} disabled={!hasProject} className="btn-primary">Vào Participant mode</button></div>
+          <div className="panel p-8"><div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-[0.3em] mb-4">MODE 01</div><h2 className="font-display text-4xl mb-3">Admin mode</h2><p className="text-[var(--text-2)] text-sm leading-relaxed mb-6">Dùng cho nhóm nghiên cứu: tạo project, thêm/xoá ảnh/video, nhập tên ngành, sắp xếp stimulus, định nghĩa AOI.</p><div className="flex gap-2 flex-wrap"><button onClick={onAdmin} className="btn-primary">Vào Admin mode</button><button onClick={onNewProject} className="btn-ghost">+ Project mới</button></div></div>
+          <div className="panel p-8"><div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-[0.3em] mb-4">MODE 02</div><h2 className="font-display text-4xl mb-3">Participant mode</h2><p className="text-[var(--text-2)] text-sm leading-relaxed mb-6">Dùng cho người tham gia: nhập thông tin, xem các quảng cáo và ghi dữ liệu.</p>{!hasProject&&<div className="text-[var(--danger)] text-xs font-mono mb-4">Project hiện tại chưa có stimulus. Hãy vào Admin mode để thêm stimulus và AOI trước.</div>}<button onClick={onUser} disabled={!hasProject} className="btn-primary">Vào Participant mode</button></div>
         </div>
       </div>
     </div>
@@ -5515,7 +5787,7 @@ function App(){
     if(phase==='aoi')return <Shell phase="aoi"><FloatingHomeButton onClick={backToMode} />{adminBar}<AoiPhase onNext={async()=>{await saveCurrentProject();setPhase('admin_done')}} stimuli={stimuli} updateStimulus={updateStimulus} onEditStimuli={()=>setPhase('upload')} onCreateProject={createNewProject} onSaveProject={saveCurrentProject} projectInfo={projectInfo} onProjectNameChange={setProjectName} /><AdminTestDataPanel projectInfo={projectInfo} /></Shell>;
     return <AdminComplete stimuli={stimuli} projectInfo={projectInfo} onProjectNameChange={setProjectName} onBack={()=>setPhase('aoi')} onEditStimuli={()=>setPhase('upload')} onUser={enterUser} onCreateProject={createNewProject} onSaveProject={saveCurrentProject} projects={projects} onSelectProject={selectProject} onDeleteProject={deleteProjectFlow} onHome={backToMode} />;
   }
-  return(<Shell phase={phase}><FloatingHomeButton onClick={backToMode} /><div className="mb-4 flex justify-end"><button onClick={backToMode} className="btn-ghost">← Chọn lại mode</button></div>{phase==='welcome'&&<WelcomePhase onNext={()=>setPhase('calibration')} demographics={demographics} setDemographics={setDemographics} />}{phase==='calibration'&&<CalibrationPhase onNext={()=>setPhase('recording')} gazeReady={gazeReady} setGazeReady={setGazeReady} />}{phase==='recording'&&<RecordingPhase onNext={()=>setPhase('results')} stimuli={stimuli} updateStimulus={updateStimulus} />}{phase==='results'&&<ResultsPhase sessionId={sessionId} demographics={demographics} stimuli={stimuli} onRestart={restartUser} projectInfo={projectInfo} />}</Shell>);
+  return(<Shell phase={phase}>{phase!=='calibration'&&<FloatingHomeButton onClick={backToMode} />}<div className="mb-4 flex justify-end"><button onClick={backToMode} className="btn-ghost">← Chọn lại mode</button></div>{phase==='welcome'&&<WelcomePhase onNext={()=>setPhase('calibration')} demographics={demographics} setDemographics={setDemographics} />}{phase==='calibration'&&<CalibrationPhase onNext={()=>setPhase('recording')} gazeReady={gazeReady} setGazeReady={setGazeReady} />}{phase==='recording'&&<RecordingPhase onNext={()=>setPhase('results')} stimuli={stimuli} updateStimulus={updateStimulus} />}{phase==='results'&&<ResultsPhase sessionId={sessionId} demographics={demographics} stimuli={stimuli} onRestart={restartUser} projectInfo={projectInfo} />}</Shell>);
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
