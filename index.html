@@ -3580,6 +3580,61 @@ async function deleteStoredProject(projectId){
   await setActiveProjectId(list[0]?.id||null).catch(err=>console.warn('Could not update active project:',err));
   return list;
 }
+function normalizeImportedProject(raw,sourceFileName=''){
+  if(!raw||typeof raw!=='object')throw new Error('File JSON không đúng định dạng project EyeLab.');
+  const source=Array.isArray(raw.stimuli)?raw:(raw.project&&Array.isArray(raw.project.stimuli)?raw.project:null);
+  if(!source)throw new Error('Không tìm thấy danh sách stimuli trong file JSON.');
+  const importedStimuli=(source.stimuli||[]).map((s,i)=>{
+    const dataUrl=s.dataUrl||s.url||'';
+    if(!dataUrl)throw new Error(`Stimulus #${i+1} không có dữ liệu ảnh/video (dataUrl).`);
+    const inferredType=s.type||(String(dataUrl).startsWith('data:video')?'video':'image');
+    if(!['image','video'].includes(inferredType))throw new Error(`Stimulus #${i+1} có type không hợp lệ.`);
+    return{
+      id:Date.now()+i,
+      type:inferredType,
+      name:(s.name||s.fileName||`Stimulus ${i+1}`).replace(/\.[^.]+$/,''),
+      industry:s.industry||'',
+      fileName:s.fileName||`${slug(s.name||'stimulus_'+(i+1))}.${inferredType==='video'?'mp4':'png'}`,
+      size:Number(s.size)||0,
+      displayDurationSec:Math.max(1,Math.min(120,Number(s.displayDurationSec)||DEFAULT_IMAGE_DURATION_SEC)),
+      order:i+1,
+      aois:(s.aois||[]).map((a,j)=>({
+        id:a.id||('AOI-'+(j+1)+'-'+Date.now()),
+        name:a.name||`AOI ${j+1}`,
+        x:Number(a.x)||0,
+        y:Number(a.y)||0,
+        w:Number(a.w)||0.1,
+        h:Number(a.h)||0.1,
+        startTime:Number(a.startTime)||0,
+        endTime:Number(a.endTime)||Number(s.displayDurationSec)||DEFAULT_IMAGE_DURATION_SEC,
+        color:a.color
+      })),
+      dataUrl,
+      url:dataUrl,
+      gazeData:[],
+      durationMs:0
+    };
+  });
+  if(!importedStimuli.length)throw new Error('Project JSON không có stimulus nào.');
+  const fallbackName=sourceFileName?sourceFileName.replace(/\.json$/i,''):DEFAULT_PROJECT_NAME;
+  const importedName=(source.name||raw.name||fallbackName||DEFAULT_PROJECT_NAME).trim()||DEFAULT_PROJECT_NAME;
+  const payload=createProjectPayload(importedStimuli,{name:importedName,createdAt:new Date().toISOString()});
+  payload.importedAt=new Date().toISOString();
+  payload.importedFrom=sourceFileName||'JSON file';
+  payload.originalProjectId=source.id||raw.id||null;
+  return payload;
+}
+async function importStoredProjectFromConfig(raw,sourceFileName=''){
+  const payload=normalizeImportedProject(raw,sourceFileName);
+  await idbPut(EYELAB_PROJECT_STORE,payload);
+  await setActiveProjectId(payload.id);
+  return payload;
+}
+async function readProjectJsonFile(file){
+  if(!file)throw new Error('Chưa chọn file JSON.');
+  const text=await file.text();
+  try{return JSON.parse(text)}catch(e){throw new Error('File không phải JSON hợp lệ.')}
+}
 
 function compactStimulusForSession(stimulus){
   return{
@@ -5573,7 +5628,9 @@ function SmallStat({label,value}){return(<div className="panel p-3"><div classNa
 
 function FloatingHomeButton({onClick}){return <button type="button" className="home-floating" onClick={onClick} title="Về giao diện chính">⌂</button>}
 
-function AdminProjectBar({projects,currentProjectId,onSelectProject,onNewProject,onDeleteProject,projectInfo,onProjectNameChange,onSaveProject}){
+function AdminProjectBar({projects,currentProjectId,onSelectProject,onNewProject,onDeleteProject,projectInfo,onProjectNameChange,onSaveProject,onImportProject}){
+  const importInputRef=useRef(null);
+  const handleImport=e=>{const file=e.target.files?.[0];if(file)onImportProject?.(file);e.target.value=''};
   return(
     <div className="panel p-4 mb-6">
       <div className="grid lg:grid-cols-12 gap-3 items-end">
@@ -5589,12 +5646,14 @@ function AdminProjectBar({projects,currentProjectId,onSelectProject,onNewProject
           <input className="input-base" value={projectInfo?.name||''} onChange={e=>onProjectNameChange?.(e.target.value)} placeholder="Tên project" />
         </div>
         <div className="lg:col-span-4 flex gap-2 flex-wrap">
+          <input ref={importInputRef} type="file" accept="application/json,.json" onChange={handleImport} />
           <button onClick={onSaveProject} className="btn-ghost flex-1">Lưu project</button>
           <button onClick={onNewProject} className="btn-primary flex-1">+ Project mới</button>
+          <button onClick={()=>importInputRef.current?.click()} className="btn-ghost flex-1">Import JSON</button>
           <button onClick={()=>currentProjectId&&onDeleteProject?.(currentProjectId)} disabled={!currentProjectId} className="btn-danger flex-1">Xoá project</button>
         </div>
       </div>
-      <div className="font-mono text-[10px] text-[var(--text-3)] mt-3">Khi chọn project ở đây, Admin sẽ tải đúng ảnh/video, AOI và tên ngành của project đó để chỉnh sửa.</div>
+      <div className="font-mono text-[10px] text-[var(--text-3)] mt-3">Khi chọn project ở đây, Admin sẽ tải đúng ảnh/video, AOI và tên ngành của project đó để chỉnh sửa. Nút Import JSON sẽ tạo một project mới từ file config đã xuất trước đó.</div>
     </div>
   );
 }
@@ -5666,18 +5725,21 @@ function AdminTestDataPanel({projectInfo}){
 // ============================================================
 // APP
 // ============================================================
-function ModeSelect({onAdmin,onUser,hasProject,projects,currentProjectId,onSelectProject,onNewProject,onDeleteProject,storageReady}){
+function ModeSelect({onAdmin,onUser,hasProject,projects,currentProjectId,onSelectProject,onNewProject,onDeleteProject,onImportProject,storageReady}){
+  const importInputRef=useRef(null);
+  const handleImport=e=>{const file=e.target.files?.[0];if(file)onImportProject?.(file);e.target.value=''};
   if(!storageReady){
     return(<div className="min-h-screen bg-grid flex items-center justify-center px-6"><div className="panel p-8 text-center"><div className="font-display text-4xl mb-2">EyeLab<span className="text-[var(--accent)]">.</span></div><div className="font-mono text-xs text-[var(--text-2)]">Đang tải project từ IndexedDB…</div></div></div>);
   }
   return(
     <div className="min-h-screen bg-grid flex items-center justify-center px-6">
       <div className="max-w-6xl w-full">
-        <div className="text-center mb-10"><div className="font-display text-6xl mb-3">EyeLab<span className="text-[var(--accent)]">.</span></div><div className="font-mono text-[10px] text-[var(--text-3)] uppercase tracking-[0.3em]">GazeCloudAPI · IndexedDB Storage</div></div>
+        <div className="text-center mb-10"><div className="font-display text-6xl mb-3">EyeLab<span className="text-[var(--accent)]">.</span></div><div className="font-mono text-[10px] text-[var(--text-3)] uppercase tracking-[0.3em]">GazeCloudAPI · IndexedDB Storage · JSON Import/Export</div></div>
         <div className="panel mb-6">
           <div className="panel-header"><span>Projects</span><span className="font-mono">IndexedDB · {projects.length} project(s)</span></div>
           <div className="p-4 flex flex-wrap gap-2 items-center">
-            {projects.length===0&&<div className="font-mono text-xs text-[var(--text-3)]">Chưa có project nào. Bấm “Tạo project mới” để bắt đầu.</div>}
+            <input ref={importInputRef} type="file" accept="application/json,.json" onChange={handleImport} />
+            {projects.length===0&&<div className="font-mono text-xs text-[var(--text-3)]">Chưa có project nào. Bấm “Project mới” hoặc “Import project JSON” để bắt đầu.</div>}
             {projects.map(p=>(
               <div key={p.id} className="flex items-center gap-1">
                 <button onClick={()=>onSelectProject(p.id)} className={p.id===currentProjectId?'btn-primary':'btn-ghost'}>
@@ -5687,6 +5749,7 @@ function ModeSelect({onAdmin,onUser,hasProject,projects,currentProjectId,onSelec
               </div>
             ))}
             <button onClick={onNewProject} className="btn-primary">Project mới</button>
+            <button onClick={()=>importInputRef.current?.click()} className="btn-ghost">Import project JSON</button>
           </div>
         </div>
         <div className="grid md:grid-cols-2 gap-6">
@@ -5698,7 +5761,7 @@ function ModeSelect({onAdmin,onUser,hasProject,projects,currentProjectId,onSelec
   );
 }
 
-function AdminComplete({stimuli,projectInfo,onProjectNameChange,onBack,onEditStimuli,onUser,onCreateProject,onSaveProject,projects,onSelectProject,onDeleteProject,onHome}){
+function AdminComplete({stimuli,projectInfo,onProjectNameChange,onBack,onEditStimuli,onUser,onCreateProject,onSaveProject,projects,onSelectProject,onDeleteProject,onImportProject,onHome}){
   const [savedAt,setSavedAt]=useState(null);
   const save=async()=>{const p=await onSaveProject?.();setSavedAt(p?.updatedAt||new Date().toISOString());return p};
   useEffect(()=>{if(stimuli.length)save()},[]);
@@ -5707,7 +5770,7 @@ function AdminComplete({stimuli,projectInfo,onProjectNameChange,onBack,onEditSti
     <Shell phase="aoi">
       <FloatingHomeButton onClick={onHome} />
       <div>
-        <AdminProjectBar projects={projects||[]} currentProjectId={projectInfo?.id} onSelectProject={onSelectProject} onNewProject={onCreateProject} onDeleteProject={onDeleteProject} projectInfo={projectInfo} onProjectNameChange={onProjectNameChange} onSaveProject={onSaveProject} />
+        <AdminProjectBar projects={projects||[]} currentProjectId={projectInfo?.id} onSelectProject={onSelectProject} onNewProject={onCreateProject} onDeleteProject={onDeleteProject} onImportProject={onImportProject} projectInfo={projectInfo} onProjectNameChange={onProjectNameChange} onSaveProject={onSaveProject} />
         <div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-[0.3em] mb-4">ADMIN / PROJECT READY</div>
         <h2 className="font-display text-4xl mb-2">Project đã sẵn sàng</h2>
         <p className="text-[var(--text-2)] mb-6">Project được lưu trong <span className="font-mono text-[var(--accent)]">IndexedDB</span>, nên có thể chứa ảnh/video lớn hơn localStorage và Participant mode sẽ dùng đúng project hiện tại.</p>
@@ -5757,6 +5820,23 @@ function App(){
     const p=await createStoredProject(`Project ${projects.length+1}`);
     setProjectInfo({id:p.id,name:p.name,createdAt:p.createdAt});setStimuli([]);await refreshProjects();setMode('admin');setPhase('upload');
   },[projects.length,refreshProjects]);
+  const importProjectFlow=useCallback(async(file)=>{
+    try{
+      const raw=await readProjectJsonFile(file);
+      const p=await importStoredProjectFromConfig(raw,file?.name||'project.json');
+      setProjectInfo({id:p.id,name:p.name||DEFAULT_PROJECT_NAME,createdAt:p.createdAt});
+      setStimuli(hydrateStoredStimuli(p.stimuli));
+      await refreshProjects();
+      setMode('admin');
+      setPhase(p.stimuli?.length?'aoi':'upload');
+      alert(`Đã import project "${p.name}" (${p.stimuli?.length||0} stimulus).`);
+      return p;
+    }catch(e){
+      console.error(e);
+      alert('Không import được project JSON: '+(e?.message||String(e)));
+      return null;
+    }
+  },[refreshProjects]);
   const selectProject=useCallback(async(id)=>{await loadProject(id);setMode('admin');setPhase('upload')},[loadProject]);
   const deleteProjectFlow=useCallback(async(id)=>{
     const target=projects.find(p=>p.id===id);
@@ -5780,12 +5860,12 @@ function App(){
   const setProjectName=(name)=>setProjectInfo(p=>({...p,name}));
   const hasProject=stimuli.length>0;
 
-  if(!mode){return <ModeSelect onAdmin={enterAdmin} onUser={enterUser} hasProject={hasProject} projects={projects} currentProjectId={projectInfo.id} onSelectProject={selectProject} onNewProject={createNewProject} onDeleteProject={deleteProjectFlow} storageReady={storageReady} />}
+  if(!mode){return <ModeSelect onAdmin={enterAdmin} onUser={enterUser} hasProject={hasProject} projects={projects} currentProjectId={projectInfo.id} onSelectProject={selectProject} onNewProject={createNewProject} onDeleteProject={deleteProjectFlow} onImportProject={importProjectFlow} storageReady={storageReady} />}
   if(mode==='admin'){
-    const adminBar=<AdminProjectBar projects={projects} currentProjectId={projectInfo.id} onSelectProject={selectProject} onNewProject={createNewProject} onDeleteProject={deleteProjectFlow} projectInfo={projectInfo} onProjectNameChange={setProjectName} onSaveProject={saveCurrentProject} />;
+    const adminBar=<AdminProjectBar projects={projects} currentProjectId={projectInfo.id} onSelectProject={selectProject} onNewProject={createNewProject} onDeleteProject={deleteProjectFlow} onImportProject={importProjectFlow} projectInfo={projectInfo} onProjectNameChange={setProjectName} onSaveProject={saveCurrentProject} />;
     if(phase==='upload')return <Shell phase="upload"><FloatingHomeButton onClick={backToMode} />{adminBar}<UploadPhase onNext={async()=>{await saveCurrentProject();setPhase('aoi')}} stimuli={stimuli} setStimuli={setStimuli} projectInfo={projectInfo} onProjectNameChange={setProjectName} onCreateProject={createNewProject} onSaveProject={saveCurrentProject} /><AdminTestDataPanel projectInfo={projectInfo} /></Shell>;
     if(phase==='aoi')return <Shell phase="aoi"><FloatingHomeButton onClick={backToMode} />{adminBar}<AoiPhase onNext={async()=>{await saveCurrentProject();setPhase('admin_done')}} stimuli={stimuli} updateStimulus={updateStimulus} onEditStimuli={()=>setPhase('upload')} onCreateProject={createNewProject} onSaveProject={saveCurrentProject} projectInfo={projectInfo} onProjectNameChange={setProjectName} /><AdminTestDataPanel projectInfo={projectInfo} /></Shell>;
-    return <AdminComplete stimuli={stimuli} projectInfo={projectInfo} onProjectNameChange={setProjectName} onBack={()=>setPhase('aoi')} onEditStimuli={()=>setPhase('upload')} onUser={enterUser} onCreateProject={createNewProject} onSaveProject={saveCurrentProject} projects={projects} onSelectProject={selectProject} onDeleteProject={deleteProjectFlow} onHome={backToMode} />;
+    return <AdminComplete stimuli={stimuli} projectInfo={projectInfo} onProjectNameChange={setProjectName} onBack={()=>setPhase('aoi')} onEditStimuli={()=>setPhase('upload')} onUser={enterUser} onCreateProject={createNewProject} onSaveProject={saveCurrentProject} projects={projects} onSelectProject={selectProject} onDeleteProject={deleteProjectFlow} onImportProject={importProjectFlow} onHome={backToMode} />;
   }
   return(<Shell phase={phase}>{phase!=='calibration'&&<FloatingHomeButton onClick={backToMode} />}<div className="mb-4 flex justify-end"><button onClick={backToMode} className="btn-ghost">← Chọn lại mode</button></div>{phase==='welcome'&&<WelcomePhase onNext={()=>setPhase('calibration')} demographics={demographics} setDemographics={setDemographics} />}{phase==='calibration'&&<CalibrationPhase onNext={()=>setPhase('recording')} gazeReady={gazeReady} setGazeReady={setGazeReady} />}{phase==='recording'&&<RecordingPhase onNext={()=>setPhase('results')} stimuli={stimuli} updateStimulus={updateStimulus} />}{phase==='results'&&<ResultsPhase sessionId={sessionId} demographics={demographics} stimuli={stimuli} onRestart={restartUser} projectInfo={projectInfo} />}</Shell>);
 }
