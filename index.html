@@ -3783,6 +3783,47 @@ function whichAOI(xN,yN,aois,videoTimeSec){
   return null;
 }
 
+function getStimulusDurationSec(stimulus){
+  const d=Number(stimulus?.displayDurationSec);
+  if(Number.isFinite(d)&&d>0)return d;
+  const dm=Number(stimulus?.durationMs);
+  if(Number.isFinite(dm)&&dm>0)return dm/1000;
+  return DEFAULT_IMAGE_DURATION_SEC;
+}
+
+function normalizeAoisForStimulus(stimulus){
+  const dur=getStimulusDurationSec(stimulus);
+  const exactSeen=new Set();
+  const idSeen=new Set();
+  const out=[];
+  (stimulus?.aois||[]).forEach((a,i)=>{
+    const x=Math.max(0,Math.min(1,Number(a.x)||0));
+    const y=Math.max(0,Math.min(1,Number(a.y)||0));
+    const w=Math.max(0,Math.min(1-x,Number(a.w)||0));
+    const h=Math.max(0,Math.min(1-y,Number(a.h)||0));
+    if(w<=0||h<=0)return;
+    let start=Number(a.startTime);
+    let end=Number(a.endTime);
+    if(stimulus?.type==='image'){
+      start=0;
+      end=dur;
+    }else{
+      if(!Number.isFinite(start)||start<0)start=0;
+      if(!Number.isFinite(end)||end<=start)end=dur;
+      end=Math.min(Math.max(end,start+0.01),dur);
+    }
+    const name=a.name||`AOI ${i+1}`;
+    const exactKey=[name,x,y,w,h,start,end].map(v=>typeof v==='number'?v.toFixed(5):v).join('|');
+    if(exactSeen.has(exactKey))return;
+    exactSeen.add(exactKey);
+    let id=String(a.id??`AOI-${i+1}`);
+    if(idSeen.has(id))id=`${id}-${i}`;
+    idSeen.add(id);
+    out.push({...a,id,name,x,y,w,h,startTime:start,endTime:end});
+  });
+  return out;
+}
+
 
 
 // Compute the actual visible media rectangle when img/video uses object-fit: contain.
@@ -4830,7 +4871,7 @@ function AoiEditor({stimulus,onChange}){
 
   const saveDraft=()=>{
     if(!draft||!aoiName.trim())return;
-    const newA={id:aois.length+1,name:aoiName.trim(),x:draft.x,y:draft.y,w:draft.w,h:draft.h,startTime:0,endTime:mediaDur||stimulus.displayDurationSec};
+    const newA={id:'AOI-'+Date.now()+'-'+Math.random().toString(16).slice(2,8),name:aoiName.trim(),x:draft.x,y:draft.y,w:draft.w,h:draft.h,startTime:0,endTime:stimulus.type==='image'?stimulus.displayDurationSec:(mediaDur||stimulus.displayDurationSec)};
     onChange([...aois,newA]);
     setDraft(null);setAoiName('');
   };
@@ -4856,7 +4897,7 @@ function AoiEditor({stimulus,onChange}){
               <img ref={mediaRef} src={stimulus.url} alt="" className="block w-full pointer-events-none" style={{maxHeight:'60vh',objectFit:'contain'}} draggable={false} onLoad={updateMediaRect} />
             )}
             <div className="absolute pointer-events-none" style={aoiLayerStyle}>
-              {aois.map((a,i)=>{const active=stimulus.type==='image'?true:(currentTime>=a.startTime&&currentTime<=a.endTime);return(<div key={a.id} className="absolute" style={{left:`${a.x*100}%`,top:`${a.y*100}%`,width:`${a.w*100}%`,height:`${a.h*100}%`,border:`2px ${active?'solid':'dashed'} ${colors[i%colors.length]}`,backgroundColor:active?colors[i%colors.length]+'15':'transparent',opacity:active?1:0.4}}><div className="absolute -top-6 left-0 font-mono text-[10px] px-2 py-0.5 text-black font-bold" style={{background:colors[i%colors.length]}}>{a.name} {!active&&'(inactive)'}</div></div>)})}
+              {aois.map((a,i)=>{const active=stimulus.type==='image'?true:(currentTime>=a.startTime&&currentTime<=a.endTime);return(<div key={(a.id||'aoi')+'-'+i} className="absolute" style={{left:`${a.x*100}%`,top:`${a.y*100}%`,width:`${a.w*100}%`,height:`${a.h*100}%`,border:`2px ${active?'solid':'dashed'} ${colors[i%colors.length]}`,backgroundColor:active?colors[i%colors.length]+'15':'transparent',opacity:active?1:0.4}}><div className="absolute -top-6 left-0 font-mono text-[10px] px-2 py-0.5 text-black font-bold" style={{background:colors[i%colors.length]}}>{a.name} {!active&&'(inactive)'}</div></div>)})}
               {draft&&(<div className="absolute border-2 border-dashed" style={{left:`${(draft.x??Math.min(draft.x0,draft.x1))*100}%`,top:`${(draft.y??Math.min(draft.y0,draft.y1))*100}%`,width:`${(draft.w??Math.abs(draft.x1-draft.x0))*100}%`,height:`${(draft.h??Math.abs(draft.y1-draft.y0))*100}%`,borderColor:'var(--accent)',backgroundColor:'rgba(245,158,11,0.1)'}} />)}
             </div>
           </div>
@@ -5090,7 +5131,7 @@ function RecordingPhase({onNext,stimuli,updateStimulus}){
     const stim=list[idx];
     if(!stim)return;
     currentIdxRef.current=idx;
-    aoisRef.current=stim.aois;
+    aoisRef.current=normalizeAoisForStimulus(stim);
     stimTypeRef.current=stim.type;
     stimDurationMsRef.current=stim.displayDurationSec*1000;
     gazeBufferRef.current=[];
@@ -5315,8 +5356,9 @@ function ResultsPhase({sessionId,demographics,stimuli,onRestart,projectInfo}){
   // Compute results for each stimulus
   const stimulusResults=useMemo(()=>stimuli.map(s=>{
     const fixations=detectFixations(s.gazeData.map(p=>({x:p.xNorm*1000,y:p.yNorm*1000,timestamp:p.timestamp,videoTime:p.videoTime}))).map(f=>({...f,x:f.x/1000,y:f.y/1000}));
-    const metrics=computeMetrics(s.gazeData,fixations,s.aois,s.durationMs||s.displayDurationSec*1000);
-    return{stimulus:s,fixations,gazeData:s.gazeData,session:metrics.session,aois:metrics.aois};
+    const normalizedAois=normalizeAoisForStimulus(s);
+    const metrics=computeMetrics(s.gazeData,fixations,normalizedAois,s.durationMs||s.displayDurationSec*1000);
+    return{stimulus:{...s,aois:normalizedAois},fixations,gazeData:s.gazeData,session:metrics.session,aois:metrics.aois};
   }),[stimuli]);
 
   useEffect(()=>{
@@ -5393,7 +5435,7 @@ function ResultsPhase({sessionId,demographics,stimuli,onRestart,projectInfo}){
         ))}
       </div>
 
-      {result&&<StimulusResults result={result} colors={colors} />}
+      {result&&<StimulusResults key={result.stimulus.id} result={result} colors={colors} />}
 
       <div className="mt-8 panel p-5">
         <div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-widest mb-3">Hướng dẫn sử dụng dữ liệu cho SPSS</div>
@@ -5502,6 +5544,7 @@ function StimulusResults({result,colors}){
     paintHeatmapToTarget(heatmapRef.current,heatmapLowRes,mediaSize.w,mediaSize.h);
   },[heatmapLowRes,mediaSize]);
 
+  const visualAois=useMemo(()=>normalizeAoisForStimulus(stimulus),[stimulus]);
   const sortedAois=[...aois].map((a,i)=>({...a,color:colors[i%colors.length]})).sort((a,b)=>b.totalDwellMs-a.totalDwellMs);
 
   const timelineBins=useMemo(()=>{
@@ -5527,7 +5570,7 @@ function StimulusResults({result,colors}){
   };
   const drawAoiBoxes=(ctx,rect)=>{
     ctx.save();ctx.lineWidth=Math.max(2,rect.dw/500);ctx.font=`${Math.max(14,Math.round(rect.dw/70))}px JetBrains Mono, monospace`;ctx.textBaseline='top';
-    aois.forEach((a,i)=>{
+    visualAois.forEach((a,i)=>{
       const col=colors[i%colors.length];const x=rect.dx+a.x*rect.dw,y=rect.dy+a.y*rect.dh,w=a.w*rect.dw,h=a.h*rect.dh;
       ctx.strokeStyle=col;ctx.globalAlpha=0.95;ctx.strokeRect(x,y,w,h);
       const label=a.name||`AOI ${i+1}`;const tw=ctx.measureText(label).width+10;ctx.globalAlpha=0.95;ctx.fillStyle=col;ctx.fillRect(x,Math.max(0,y-22),tw,22);ctx.fillStyle='#111';ctx.fillText(label,x+5,Math.max(0,y-20));
@@ -5611,8 +5654,18 @@ function StimulusResults({result,colors}){
               ):(
                 <img ref={mediaRef} src={stimulus.url} alt="" className="block w-full" style={{maxHeight:'60vh',objectFit:'contain'}} draggable={false} onLoad={updateResultMediaRect} />
               )}
-              <canvas ref={heatmapRef} className="absolute pointer-events-none" style={{left:mediaRect?.left||0,top:mediaRect?.top||0,width:mediaRect?.width||'100%',height:mediaRect?.height||'100%',mixBlendMode:'screen',opacity:0.85}} />
-              <div className="absolute pointer-events-none" style={mediaRect?{left:mediaRect.left,top:mediaRect.top,width:mediaRect.width,height:mediaRect.height}:{left:0,top:0,width:'100%',height:'100%'}}>{aois.map((a,i)=>(<div key={a.id} className="absolute border" style={{left:`${a.x*100}%`,top:`${a.y*100}%`,width:`${a.w*100}%`,height:`${a.h*100}%`,borderColor:colors[i%colors.length]+'cc'}}><div className="absolute -top-5 left-0 font-mono text-[10px] px-1.5 py-0.5 text-black font-bold" style={{background:colors[i%colors.length]}}>{a.name}</div></div>))}</div>
+              <canvas ref={heatmapRef} className="absolute pointer-events-none" style={{left:mediaRect?.left||0,top:mediaRect?.top||0,width:mediaRect?.width||'100%',height:mediaRect?.height||'100%',mixBlendMode:'screen',opacity:0.85,zIndex:1}} />
+              <div className="absolute pointer-events-none" style={mediaRect?{left:mediaRect.left,top:mediaRect.top,width:mediaRect.width,height:mediaRect.height,zIndex:2}:{left:0,top:0,width:'100%',height:'100%',zIndex:2}}>
+                {visualAois.map((a,i)=>{
+                  const col=colors[i%colors.length];
+                  const isActive=stimulus.type==='image'||heatmapMode==='static'||(dynamicMs/1000>=a.startTime&&dynamicMs/1000<=a.endTime);
+                  return(
+                    <div key={(a.id||'aoi')+'-'+i} className="absolute" style={{left:`${a.x*100}%`,top:`${a.y*100}%`,width:`${a.w*100}%`,height:`${a.h*100}%`,border:`2px ${isActive?'solid':'dashed'} ${col}`,backgroundColor:isActive?col+'14':'transparent',boxShadow:'0 0 0 1px rgba(0,0,0,0.35) inset',opacity:isActive?1:0.45}}>
+                      <div className="absolute -top-6 left-0 font-mono text-[10px] px-2 py-0.5 text-black font-bold whitespace-nowrap" style={{background:col,boxShadow:'0 1px 4px rgba(0,0,0,0.45)'}}>{a.name}{!isActive&&stimulus.type==='video'&&heatmapMode==='dynamic'?' (inactive)':''}</div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
             <div className="p-3 space-y-3">
               <div className="font-mono text-[10px] text-[var(--text-3)] flex items-center justify-between"><span>LOW ←</span><div className="flex-1 mx-3 h-1.5" style={{background:'linear-gradient(90deg,rgb(20,60,180),rgb(0,200,255),rgb(0,240,0),rgb(255,255,0),rgb(255,55,0))'}}></div><span>→ HIGH</span></div>
