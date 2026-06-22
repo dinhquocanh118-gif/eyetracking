@@ -3651,7 +3651,8 @@ function compactStimulusResultForStorage(result){
     aois:(result.aois||[]).map(a=>({...a})),
     gazeData:(result.gazeData||[]).map(p=>({
       timestamp:p.timestamp,videoTime:p.videoTime,screenX:p.screenX,screenY:p.screenY,
-      xNorm:p.xNorm,yNorm:p.yNorm,aoi:p.aoi||''
+      xNorm:p.xNorm,yNorm:p.yNorm,aoi:p.aoi||formatAoiHitNames(p.aois)||'',
+      aois:Array.isArray(p.aois)?p.aois:(p.aoi?String(p.aoi).split(/\s*(?:\||\+)\s*/).filter(Boolean):[])
     })),
     fixations:(result.fixations||[]).map(f=>({
       id:f.id,x:f.x,y:f.y,duration:f.duration,startTime:f.startTime,endTime:f.endTime,
@@ -3720,7 +3721,7 @@ function exportSavedTestSessionsExcel(sessions,filenamePrefix='eyelab_all_saved_
     (r.stimulusResults||[]).forEach(sr=>{
       (sr.gazeData||[]).forEach((g,i)=>{
         const inside=(g.xNorm>=0&&g.xNorm<=1&&g.yNorm>=0&&g.yNorm<=1)?1:0;
-        rawRows.push([r.sessionId,r.projectId,r.projectName,r.participantId,r.participantName,sr.stimulus?.order,sr.stimulus?.name,sr.stimulus?.industry||'',sr.stimulus?.type,i+1,Math.round(g.timestamp||0),Math.round(g.videoTime||0),Math.round(g.screenX||0),Math.round(g.screenY||0),fmt(g.xNorm,4),fmt(g.yNorm,4),inside,g.aoi||'']);
+        rawRows.push([r.sessionId,r.projectId,r.projectName,r.participantId,r.participantName,sr.stimulus?.order,sr.stimulus?.name,sr.stimulus?.industry||'',sr.stimulus?.type,i+1,Math.round(g.timestamp||0),Math.round(g.videoTime||0),Math.round(g.screenX||0),Math.round(g.screenY||0),fmt(g.xNorm,4),fmt(g.yNorm,4),inside,g.aoi||formatAoiHitNames(g.aois)||'']);
       });
     });
   });
@@ -3773,14 +3774,43 @@ function detectFixations(gazePoints,dispersionPx=50,minDurationMs=100){
 }
 
 // AOI hit test with optional time bounds (videoTimeSec is current time in seconds)
-function whichAOI(xN,yN,aois,videoTimeSec){
+// Return ALL matching AOIs instead of stopping at the first one.
+// This fixes cases where the participant looks from one AOI to another, or where AOIs overlap.
+function whichAOIs(xN,yN,aois,videoTimeSec){
+  const hits=[];
   for(const a of aois){
     if(videoTimeSec!=null){
       if(videoTimeSec<a.startTime||videoTimeSec>a.endTime)continue;
     }
-    if(xN>=a.x&&xN<=a.x+a.w&&yN>=a.y&&yN<=a.y+a.h)return a;
+    if(xN>=a.x&&xN<=a.x+a.w&&yN>=a.y&&yN<=a.y+a.h)hits.push(a);
   }
-  return null;
+  return hits;
+}
+
+// Backward-compatible single AOI helper. New code should use whichAOIs().
+function whichAOI(xN,yN,aois,videoTimeSec){
+  const hits=whichAOIs(xN,yN,aois,videoTimeSec);
+  return hits.length?hits[0]:null;
+}
+
+function formatAoiHitNames(names){
+  return (names||[]).filter(Boolean).join(' | ');
+}
+
+function getPointAoiNames(p){
+  if(!p)return[];
+  if(Array.isArray(p.aois))return p.aois.filter(Boolean);
+  if(p.aoi==null||p.aoi==='')return[];
+  return String(p.aoi).split(/\s*(?:\||\+)\s*/).filter(Boolean);
+}
+
+function hasAnyAoiHit(p){
+  return getPointAoiNames(p).length>0;
+}
+
+function pointHitsAoi(p,aoi){
+  if(!aoi)return false;
+  return getPointAoiNames(p).includes(aoi.name);
 }
 
 function getStimulusDurationSec(stimulus){
@@ -3859,7 +3889,7 @@ function computeMetrics(gazeData,fixations,aois,videoDurationMs){
   if(!gazeData.length)return{session:{videoDurationMs,totalSamples:0,totalFixations:0,totalSaccades:0,samplingRateHz:0,meanFixationDurMs:0,medianFixationDurMs:0,stdFixationDurMs:0,fixationRatePerSec:0,meanSaccadeAmp:0,meanSaccadeVel:0,scanPathLength:0,engagementScore:0,videoFocus:0,aoiCoverage:0,timeToFirstFixationMs:null,firstGazeInVideoMs:null,lastGazeInVideoMs:null,dropOffPointMs:null,totalSessionMs:0},aois:aois.map(a=>({...a,hitCount:0,fixationCount:0,visitCount:0,revisitCount:0,totalDwellMs:0,meanFixationDurMs:0,timeToFirstFixationMs:null,timeToFirstVisitMs:null,lastFixationMs:null,pctTimeOnAoi:0,pctTimeOnAoiActive:0,meanDwellPerVisitMs:0,areaPct:a.w*a.h*100,activeDurationSec:a.endTime-a.startTime,attentionIndex:0}))};
   const totalSession=gazeData[gazeData.length-1].videoTime-gazeData[0].videoTime;
   const inVideo=gazeData.filter(p=>p.xNorm>=0&&p.xNorm<=1&&p.yNorm>=0&&p.yNorm<=1);
-  const inAnyAoi=gazeData.filter(p=>p.aoi!=null);
+  const inAnyAoi=gazeData.filter(p=>hasAnyAoiHit(p));
   const saccades=[];
   for(let i=1;i<fixations.length;i++){
     const a=fixations[i-1],b=fixations[i];
@@ -3874,7 +3904,8 @@ function computeMetrics(gazeData,fixations,aois,videoDurationMs){
   const lastInVideo=inVideo.length?inVideo[inVideo.length-1].videoTime:null;
   const engagementScore=gazeData.length?(inAnyAoi.length/gazeData.length)*100:0;
   const videoFocus=gazeData.length?(inVideo.length/gazeData.length)*100:0;
-  const aoiVisited=new Set(gazeData.map(p=>p.aoi).filter(Boolean));
+  const aoiVisited=new Set();
+  gazeData.forEach(p=>getPointAoiNames(p).forEach(name=>aoiVisited.add(name)));
   const coverage=aois.length?(aoiVisited.size/aois.length)*100:0;
   const session={
     totalSamples:gazeData.length,totalFixations:fixations.length,totalSaccades:saccades.length,
@@ -3890,14 +3921,14 @@ function computeMetrics(gazeData,fixations,aois,videoDurationMs){
     dropOffPointMs:lastInVideo,
   };
   const aoiMetrics=aois.map(a=>{
-    const ptsIn=gazeData.filter(p=>p.aoi===a.name);
+    const ptsIn=gazeData.filter(p=>pointHitsAoi(p,a));
     const fxIn=fixations.filter(f=>{
       const vt=f.videoTimeStart/1000;
       if(vt<a.startTime||vt>a.endTime)return false;
       return f.x>=a.x&&f.x<=a.x+a.w&&f.y>=a.y&&f.y<=a.y+a.h;
     });
     let visits=0;let prev=false;
-    for(const p of gazeData){const cur=p.aoi===a.name;if(cur&&!prev)visits++;prev=cur}
+    for(const p of gazeData){const cur=pointHitsAoi(p,a);if(cur&&!prev)visits++;prev=cur}
     const dwell=fxIn.reduce((s,f)=>s+f.duration,0);
     const fxDurs=fxIn.map(f=>f.duration);
     const aoiDurMs=Math.max(1,(a.endTime-a.startTime)*1000);
@@ -4136,7 +4167,7 @@ function exportToExcel({sessionId,demographics,stimulusResults}){
 
     // Raw gaze
     const rh=['sample_idx','timestamp_ms','stim_time_ms','screen_x_px','screen_y_px','x_norm','y_norm','inside_stim','aoi_hit','stimulus_industry'];
-    const rr=r.gazeData.map((p,i)=>[i+1,Math.round(p.timestamp),Math.round(p.videoTime),Math.round(p.screenX),Math.round(p.screenY),fmt(p.xNorm,4),fmt(p.yNorm,4),(p.xNorm>=0&&p.xNorm<=1&&p.yNorm>=0&&p.yNorm<=1)?1:0,p.aoi||'',r.stimulus.industry||'']);
+    const rr=r.gazeData.map((p,i)=>[i+1,Math.round(p.timestamp),Math.round(p.videoTime),Math.round(p.screenX),Math.round(p.screenY),fmt(p.xNorm,4),fmt(p.yNorm,4),(p.xNorm>=0&&p.xNorm<=1&&p.yNorm>=0&&p.yNorm<=1)?1:0,p.aoi||formatAoiHitNames(p.aois)||'',r.stimulus.industry||'']);
     const wsRaw=XLSX.utils.aoa_to_sheet([rh,...rr]);
     wsRaw['!cols']=rh.map(()=>({wch:14}));
     XLSX.utils.book_append_sheet(wb,wsRaw,`${sName}_Raw`);
@@ -4169,7 +4200,7 @@ function exportRawCSV({sessionId,demographics,stimulusResults}){
   stimulusResults.forEach(r=>{
     r.gazeData.forEach((p,i)=>{
       const inside=(p.xNorm>=0&&p.xNorm<=1&&p.yNorm>=0&&p.yNorm<=1)?1:0;
-      lines.push([sessionId,demographics.participantId,`"${sn}"`,demographics.age||'',demographics.gender||'',demographics.education||'',r.stimulus.order,`"${(r.stimulus.name||'').replace(/"/g,'""')}"`,`"${(r.stimulus.industry||'').replace(/"/g,'""')}"`,r.stimulus.type,i+1,Math.round(p.timestamp),Math.round(p.videoTime),Math.round(p.screenX),Math.round(p.screenY),fmt(p.xNorm,4),fmt(p.yNorm,4),inside,p.aoi||''].join(','));
+      lines.push([sessionId,demographics.participantId,`"${sn}"`,demographics.age||'',demographics.gender||'',demographics.education||'',r.stimulus.order,`"${(r.stimulus.name||'').replace(/"/g,'""')}"`,`"${(r.stimulus.industry||'').replace(/"/g,'""')}"`,r.stimulus.type,i+1,Math.round(p.timestamp),Math.round(p.videoTime),Math.round(p.screenX),Math.round(p.screenY),fmt(p.xNorm,4),fmt(p.yNorm,4),inside,p.aoi||formatAoiHitNames(p.aois)||''].join(','));
     });
   });
   const blob=new Blob(['\uFEFF'+lines.join('\n')],{type:'text/csv;charset=utf-8;'});
@@ -5072,9 +5103,11 @@ function RecordingPhase({onNext,stimuli,updateStimulus}){
         let stimT=0;
         if(stimTypeRef.current==='video'&&videoRef.current){stimT=videoRef.current.currentTime}
         else{stimT=(nowMs()-startTimeRef.current)/1000}
-        const hit=inB?whichAOI(xN,yN,aoisRef.current,stimT):null;
-        pendingAoi=hit?hit.name:null;
-        gazeBufferRef.current.push({timestamp:nowMs(),videoTime:stimT*1000,screenX:lx,screenY:ly,xNorm:xN,yNorm:yN,aoi:hit?hit.name:null,trackingState:data.state,rawX:data.GazeX??'',rawY:data.GazeY??''});
+        const hits=inB?whichAOIs(xN,yN,aoisRef.current,stimT):[];
+        const hitNames=hits.map(h=>h.name);
+        const hitLabel=formatAoiHitNames(hitNames);
+        pendingAoi=hitLabel||null;
+        gazeBufferRef.current.push({timestamp:nowMs(),videoTime:stimT*1000,screenX:lx,screenY:ly,xNorm:xN,yNorm:yN,aoi:hitLabel||null,aois:hitNames,trackingState:data.state,rawX:data.GazeX??'',rawY:data.GazeY??''});
         if(!throttle){throttle=setTimeout(()=>{setSampleCount(gazeBufferRef.current.length);setLiveAoi(pendingAoi);throttle=null},250)}
       }
     };
@@ -5549,7 +5582,7 @@ function StimulusResults({result,colors}){
 
   const timelineBins=useMemo(()=>{
     const bins=60;const dur=stimDurMs;const bs=dur/bins;
-    return Array.from({length:bins},(_,i)=>{const t0=i*bs,t1=(i+1)*bs;const ib=gazeData.filter(p=>p.videoTime>=t0&&p.videoTime<t1);const ia=ib.filter(p=>p.aoi!=null).length;return{t:(t0+t1)/2,count:ib.length,aoi:ia}});
+    return Array.from({length:bins},(_,i)=>{const t0=i*bs,t1=(i+1)*bs;const ib=gazeData.filter(p=>p.videoTime>=t0&&p.videoTime<t1);const ia=ib.filter(p=>hasAnyAoiHit(p)).length;return{t:(t0+t1)/2,count:ib.length,aoi:ia}});
   },[gazeData,stimDurMs]);
 
   const getExportSize=(source)=>{
