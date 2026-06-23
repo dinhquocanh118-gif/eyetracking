@@ -3813,6 +3813,29 @@ function pointHitsAoi(p,aoi){
   return getPointAoiNames(p).includes(aoi.name);
 }
 
+function getSampleDwellMsForAoi(gazeData,aoi){
+  if(!gazeData?.length||!aoi)return 0;
+  const dts=[];
+  for(let i=0;i<gazeData.length-1;i++){
+    const dt=Number(gazeData[i+1].videoTime)-Number(gazeData[i].videoTime);
+    if(Number.isFinite(dt)&&dt>0&&dt<=500)dts.push(dt);
+  }
+  const medianDt=median(dts)||33;
+  const pointDuration=(i)=>{
+    const next=Number(gazeData[i+1]?.videoTime)-Number(gazeData[i]?.videoTime);
+    if(Number.isFinite(next)&&next>0&&next<=500)return next;
+    const prev=Number(gazeData[i]?.videoTime)-Number(gazeData[i-1]?.videoTime);
+    if(Number.isFinite(prev)&&prev>0&&prev<=500)return prev;
+    return medianDt;
+  };
+  let dwell=0;
+  for(let i=0;i<gazeData.length;i++){
+    const p=gazeData[i];
+    if(pointHitsAoi(p,aoi))dwell+=pointDuration(i);
+  }
+  return dwell;
+}
+
 function getStimulusDurationSec(stimulus){
   const d=Number(stimulus?.displayDurationSec);
   if(Number.isFinite(d)&&d>0)return d;
@@ -3929,7 +3952,12 @@ function computeMetrics(gazeData,fixations,aois,videoDurationMs){
     });
     let visits=0;let prev=false;
     for(const p of gazeData){const cur=pointHitsAoi(p,a);if(cur&&!prev)visits++;prev=cur}
-    const dwell=fxIn.reduce((s,f)=>s+f.duration,0);
+    const fixationDwell=fxIn.reduce((s,f)=>s+f.duration,0);
+    // Dwell is computed from raw gaze samples instead of fixation centroid only.
+    // This prevents an AOI from showing VISITS > 0 but DWELL = 0 when the user moves
+    // from one AOI to another and the movement does not become a stable fixation.
+    const sampleDwell=getSampleDwellMsForAoi(gazeData,a);
+    const dwell=sampleDwell>0?sampleDwell:fixationDwell;
     const fxDurs=fxIn.map(f=>f.duration);
     const aoiDurMs=Math.max(1,(a.endTime-a.startTime)*1000);
     return{
